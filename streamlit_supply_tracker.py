@@ -86,7 +86,7 @@ def init_catalog(upload: bytes | None):
         raw = pd.read_csv(io.BytesIO(upload))
         tidy = clean_catalog(raw)
         if tidy.empty:
-            st.error("Uploaded file couldn't be parsed into a catalog. Please check columns.')
+            st.error("Uploaded file couldn't be parsed into a catalog. Please check columns.")
         else:
             tidy = tidy.sort_values('item').reset_index(drop=True)
             tidy['current_qty'] = 0
