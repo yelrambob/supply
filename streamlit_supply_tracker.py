@@ -4,6 +4,8 @@ import io
 from datetime import datetime
 from pathlib import Path
 from pandas.errors import EmptyDataError
+import smtplib, ssl
+from email.message import EmailMessage
 
 st.set_page_config(page_title="Supply Tracker", page_icon="📦", layout="wide")
 
@@ -45,7 +47,7 @@ def clean_catalog(df: pd.DataFrame) -> pd.DataFrame:
     """
     Convert a 'wide' sheet (name col + nearby numeric col) into tidy rows:
     ['item','product_number','current_qty','sort_order'].
-    We preserve the original input order via sort_order so you are NOT forced A→Z.
+    We preserve the original input order via sort_order (NOT forced A→Z).
     """
     tidy_rows = []
     cols = df.columns.tolist()
@@ -53,13 +55,9 @@ def clean_catalog(df: pd.DataFrame) -> pd.DataFrame:
     i = 0
     while i < n:
         candidate_idxs = []
-        if i + 1 < n:
-            candidate_idxs.append(i + 1)
-        if i + 2 < n:
-            candidate_idxs.append(i + 2)
-        if i + 3 < n:
-            candidate_idxs.append(i + 3)
-
+        if i + 1 < n: candidate_idxs.append(i + 1)
+        if i + 2 < n: candidate_idxs.append(i + 2)
+        if i + 3 < n: candidate_idxs.append(i + 3)
         chosen_prod_idx = None
         for idx in candidate_idxs:
             series = df.iloc[:, idx]
@@ -67,7 +65,6 @@ def clean_catalog(df: pd.DataFrame) -> pd.DataFrame:
             if numeric_like >= max(5, len(series) * 0.1):
                 chosen_prod_idx = idx
                 break
-
         name_series = df.iloc[:, i].astype(str).str.strip()
         if chosen_prod_idx is not None:
             prod_series = pd.to_numeric(df.iloc[:, chosen_prod_idx], errors="coerce")
@@ -117,14 +114,22 @@ def read_catalog():
         return pd.DataFrame(columns=["item", "product_number", "current_qty", "sort_order"])
     for c in ["item", "product_number", "current_qty", "sort_order"]:
         if c not in df.columns:
-            df[c] = pd.Series(dtype="object")
+            df[c] = pd.NA
     df["product_number"] = pd.to_numeric(df["product_number"], errors="coerce").astype("Int64")
-    df["current_qty"] = pd.to_numeric(df["current_qty"], errors="coerce").fillna(0).astype(int)
-    # If sort_order missing/invalid, regenerate a stable order
-    if "sort_order" not in df.columns or df["sort_order"].isna().all():
-        df["sort_order"] = range(len(df))
+    df["current_qty"]   = pd.to_numeric(df["current_qty"],   errors="coerce").fillna(0).astype(int)
+
+    # Handle sort_order (index-aligned filler!)
+    if "sort_order" not in df.columns:
+        df["sort_order"] = pd.Series(range(len(df)), index=df.index)
     else:
-        df["sort_order"] = pd.to_numeric(df["sort_order"], errors="coerce").fillna(pd.Series(range(len(df)), index=df.index)).astype(int)
+        so = pd.to_numeric(df["sort_order"], errors="coerce")
+        filler = pd.Series(range(len(df)), index=df.index)
+        so = so.fillna(filler)
+        try:
+            df["sort_order"] = so.astype(int)
+        except ValueError:
+            df["sort_order"] = filler.astype(int)
+
     return df[["item", "product_number", "current_qty", "sort_order"]].reset_index(drop=True)
 
 def write_catalog(df: pd.DataFrame):
@@ -134,8 +139,9 @@ def write_catalog(df: pd.DataFrame):
     if "sort_order" not in df.columns:
         df["sort_order"] = range(len(df))
     df["product_number"] = pd.to_numeric(df["product_number"], errors="coerce").astype("Int64")
-    df["current_qty"] = pd.to_numeric(df["current_qty"], errors="coerce").fillna(0).astype(int)
-    df["sort_order"] = pd.to_numeric(df["sort_order"], errors="coerce").fillna(pd.Series(range(len(df)), index=df.index)).astype(int)
+    df["current_qty"]    = pd.to_numeric(df["current_qty"],    errors="coerce").fillna(0).astype(int)
+    so = pd.to_numeric(df["sort_order"], errors="coerce")
+    df["sort_order"] = so.fillna(pd.Series(range(len(df)), index=df.index)).astype(int)
     df.to_csv(CATALOG_PATH, index=False)
 
 def append_log(order_df: pd.DataFrame, orderer: str):
@@ -177,13 +183,14 @@ def append_log(order_df: pd.DataFrame, orderer: str):
     combined.to_csv(LOG_PATH, index=False)
     return now
 
+
 def load_last_order() -> pd.DataFrame:
     df = safe_read_csv(LAST_ORDER_PATH)
     if df.empty:
         return pd.DataFrame(columns=LAST_ORDER_COLUMNS)
     for c in LAST_ORDER_COLUMNS:
         if c not in df.columns:
-            df[c] = pd.Series(dtype="object")
+            df[c] = pd.NA
     df["qty"] = pd.to_numeric(df["qty"], errors="coerce").fillna(0).astype(int)
     return df[LAST_ORDER_COLUMNS]
 
@@ -212,6 +219,60 @@ def last_order_info_map() -> pd.DataFrame:
     return idx[["item", "product_number", "ordered_at", "qty"]].rename(
         columns={"ordered_at": "last_ordered_at", "qty": "last_qty"}
     )
+
+# ---------- Email ----------
+def get_smtp_config():
+    smtp = st.secrets.get("smtp", {})
+    return {
+        "host": smtp.get("host"),
+        "port": int(smtp.get("port", 465)),
+        "user": smtp.get("user"),
+        "password": smtp.get("password"),
+        "mail_from": smtp.get("from", smtp.get("user")),
+        "default_to": smtp.get("to", ""),
+        "use_ssl": int(smtp.get("port", 465)) == 465,
+    }
+
+def send_email(order_df: pd.DataFrame, orderer: str, recipients_str: str) -> bool:
+    cfg = get_smtp_config()
+    if not cfg["host"]:
+        st.warning("Email not sent: SMTP is not configured in Streamlit secrets.")
+        return False
+    recipients = [r.strip() for r in recipients_str.split(",") if r.strip()]
+    if not recipients:
+        st.warning("Email not sent: No recipients provided.")
+        return False
+
+    subject = f"Supply Order — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} — {orderer}"
+    lines = [f"{r['item']} — {r['product_number']} — Qty {r['qty']}" for _, r in order_df.iterrows()]
+    body = "Order details:\n\n" + "\n".join(lines)
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = cfg["mail_from"]
+    msg["To"] = ", ".join(recipients)
+    msg.set_content(body)
+
+    csv_bytes = order_df.to_csv(index=False).encode("utf-8")
+    msg.add_attachment(csv_bytes, maintype="text", subtype="csv", filename="order.csv")
+
+    try:
+        if cfg["use_ssl"]:
+            with smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=ssl.create_default_context()) as s:
+                if cfg["user"] and cfg["password"]:
+                    s.login(cfg["user"], cfg["password"])
+                s.send_message(msg)
+        else:
+            with smtplib.SMTP(cfg["host"], cfg["port"]) as s:
+                s.ehlo()
+                s.starttls(context=ssl.create_default_context())
+                if cfg["user"] and cfg["password"]:
+                    s.login(cfg["user"], cfg["password"])
+                s.send_message(msg)
+        return True
+    except Exception as e:
+        st.error(f"Email failed: {e}")
+        return False
 
 # ---------- Sidebar: Setup & People ----------
 st.sidebar.header("Setup")
@@ -267,14 +328,8 @@ with tab_catalog:
             if new_item.strip() and new_prod.strip():
                 next_order = (cat["sort_order"].max() + 1) if not cat.empty else 0
                 new_row = pd.DataFrame(
-                    [
-                        {
-                            "item": new_item.strip(),
-                            "product_number": new_prod.strip(),
-                            "current_qty": int(new_qty),
-                            "sort_order": int(next_order),
-                        }
-                    ]
+                    [{"item": new_item.strip(), "product_number": new_prod.strip(),
+                      "current_qty": int(new_qty), "sort_order": int(next_order)}]
                 )
                 updated = pd.concat([cat, new_row], ignore_index=True).drop_duplicates(
                     subset=["item", "product_number"], keep="last"
@@ -326,7 +381,7 @@ with tab_order:
     if cat.empty:
         st.info("No catalog yet. Initialize it from the sidebar.")
     else:
-        # Show last generated order list with date/user columns
+        # Last generated order (now includes date & user)
         last_order_df = load_last_order()
         if not last_order_df.empty:
             st.markdown("**Last generated order (persists across sessions):**")
@@ -342,29 +397,21 @@ with tab_order:
         loi = last_order_info_map()
         table = cat.merge(loi, on=["item", "product_number"], how="left")
 
-        # Convert last_ordered_at BEFORE sorting to make sort work reliably
+        # Convert last_ordered_at BEFORE sorting so sort works
         table["last_ordered_at"] = pd.to_datetime(table.get("last_ordered_at"), errors="coerce")
 
-        # Sorting choices (NOT forced A→Z)
+        # Sorting (NOT forced A→Z)
         sort_choice = st.selectbox(
             "Sort items by",
-            options=[
-                "Original order",
-                "Last ordered (newest first)",
-                "Last ordered (oldest first)",
-                "Product # asc",
-                "Name A→Z",
-            ],
+            options=["Original order", "Last ordered (newest first)", "Last ordered (oldest first)", "Product # asc", "Name A→Z"],
             index=0,
         )
         if sort_choice == "Original order":
             table = table.sort_values(["sort_order", "item"], kind="stable")
         elif sort_choice == "Last ordered (newest first)":
-            # Fill NaT with very old date so "never ordered" items sink to bottom
             sort_key = table["last_ordered_at"].fillna(pd.Timestamp("1900-01-01"))
             table = table.iloc[sort_key.sort_values(ascending=False).index]
         elif sort_choice == "Last ordered (oldest first)":
-            # Fill NaT with far-future date so "never ordered" items sink to bottom
             sort_key = table["last_ordered_at"].fillna(pd.Timestamp("2999-12-31"))
             table = table.iloc[sort_key.sort_values(ascending=True).index]
         elif sort_choice == "Product # asc":
@@ -372,16 +419,16 @@ with tab_order:
         elif sort_choice == "Name A→Z":
             table = table.sort_values(["item"], kind="stable")
 
-        # Search filter (after sorting keeps predictable positions)
+        # Search filter after sorting
         if search:
             table = table[table["item"].str.contains(search, case=False, na=False)]
 
-        # Prepare columns for UI
+        # Prepare UI columns
         table["last_qty"] = pd.to_numeric(table.get("last_qty"), errors="coerce")
         table["select"] = False
         table["qty"] = 0
 
-        # Prefill from persisted last order
+        # Prefill from persisted last order (qty + selection)
         if not last_order_df.empty:
             prev_map = {(r["item"], str(r["product_number"])): int(r["qty"]) for _, r in last_order_df.iterrows()}
             for i, r in table.iterrows():
@@ -405,23 +452,49 @@ with tab_order:
             },
         )
 
-        if st.button("🧾 Generate Order List"):
+        # Options that affect the single-click action
+        dec_inventory = st.checkbox("Decrement inventory by ordered qty")
+        smtp_cfg = get_smtp_config()
+        default_to = smtp_cfg["default_to"] or ""
+        send_email_opt = st.checkbox("Send email receipt")
+        email_to = st.text_input("Email to (comma-separated)", value=default_to if send_email_opt else "", disabled=not send_email_opt)
+
+        # SINGLE BUTTON: Generate, Log (and optionally email + decrement)
+        if st.button("🧾 Generate & Log Order"):
             chosen = edited[(edited["select"]) & (edited["qty"] > 0)].copy()
             if chosen.empty:
                 st.error("Please check items and set Qty > 0.")
+            elif not people or orderer == "(add names in sidebar)":
+                st.error("Please add/select an orderer in the sidebar first.")
             else:
                 order_df = chosen[["item", "product_number", "qty"]].copy()
-                st.success("Order list created.")
+
+                # Show the order on screen
+                st.success("Order generated and logged.")
                 st.dataframe(order_df, use_container_width=True, hide_index=True)
 
-                # Persist for next person/session with date & user
-                if not people or orderer == "(add names in sidebar)":
-                    st.warning("Tip: Add/select an orderer in the sidebar so the saved list shows who generated it.")
-                    save_last_order(order_df, orderer="(unknown)")
-                else:
-                    save_last_order(order_df, orderer=orderer)
+                # Persist for next session w/ date & user
+                save_last_order(order_df, orderer=orderer)
 
-                # Download & copy-paste helpers
+                # Log to CSV with timestamp & orderer
+                now = append_log(order_df, orderer)
+
+                # Decrement inventory if chosen
+                if dec_inventory:
+                    cat2 = cat.copy()
+                    for _, r in order_df.iterrows():
+                        idx = cat2.index[cat2["item"] == r["item"]][0]
+                        cat2.loc[idx, "current_qty"] = max(0, int(cat2.loc[idx, "current_qty"]) - int(r["qty"]))
+                    write_catalog(cat2)
+                    st.info("Inventory updated.")
+
+                # Email if chosen and configured
+                if send_email_opt:
+                    ok = send_email(order_df, orderer, email_to)
+                    if ok:
+                        st.success("Email sent.")
+
+                # Download helper & copy-paste block
                 csv_bytes = order_df.to_csv(index=False).encode("utf-8")
                 st.download_button(
                     "⬇️ Download CSV",
@@ -429,23 +502,8 @@ with tab_order:
                     file_name=f"order_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
                 )
-
                 txt_lines = [f"{r['item']} — {r['product_number']} — Qty {r['qty']}" for _, r in order_df.iterrows()]
                 st.text_area("Copy-paste for your other system", value="\n".join(txt_lines), height=150)
-
-                if st.button("📝 Log this order"):
-                    if not people or orderer == "(add names in sidebar)":
-                        st.error("Please add/select an orderer in the sidebar first.")
-                    else:
-                        now = append_log(order_df, orderer)
-                        st.success(f"Order logged at {now}.")
-                        if st.checkbox("Decrement inventory by ordered qty"):
-                            cat2 = cat.copy()
-                            for _, r in order_df.iterrows():
-                                idx = cat2.index[cat2["item"] == r["item"]][0]
-                                cat2.loc[idx, "current_qty"] = max(0, int(cat2.loc[idx, "current_qty"]) - int(r["qty"]))
-                            write_catalog(cat2)
-                            st.info("Inventory updated.")
 
         # Tools
         with st.expander("Tools"):
