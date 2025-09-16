@@ -15,6 +15,9 @@ LOG_PATH = DATA_DIR / "order_log.csv"
 PEOPLE_PATH = DATA_DIR / "people.txt"
 LAST_ORDER_PATH = DATA_DIR / "last_order.csv"
 
+LAST_ORDER_COLUMNS = ["item", "product_number", "qty", "generated_at", "orderer"]
+ORDER_LOG_COLUMNS = ["item", "product_number", "qty", "ordered_at", "orderer"]
+
 # ---------- Robust CSV helpers ----------
 def safe_read_csv(path: Path, **kwargs) -> pd.DataFrame:
     try:
@@ -34,15 +37,15 @@ def safe_ensure_file_with_header(path: Path, columns):
         st.warning(f"Couldn't initialize {path}: {e}")
 
 # Ensure expected files exist with correct headers
-safe_ensure_file_with_header(LAST_ORDER_PATH, ["item", "product_number", "qty"])
-safe_ensure_file_with_header(LOG_PATH, ["item", "product_number", "qty", "ordered_at", "orderer"])
+safe_ensure_file_with_header(LAST_ORDER_PATH, LAST_ORDER_COLUMNS)
+safe_ensure_file_with_header(LOG_PATH, ORDER_LOG_COLUMNS)
 
 # ---------- Utilities ----------
 def clean_catalog(df: pd.DataFrame) -> pd.DataFrame:
     """
     Convert a 'wide' sheet (name col + nearby numeric col) into tidy rows:
     ['item','product_number','current_qty','sort_order'].
-    We also preserve the original input order via sort_order so you are NOT forced A→Z.
+    We preserve the original input order via sort_order so you are NOT forced A→Z.
     """
     tidy_rows = []
     cols = df.columns.tolist()
@@ -94,7 +97,7 @@ def load_people():
 def save_people(people):
     PEOPLE_PATH.write_text("\n".join(people), encoding="utf-8")
 
-def init_catalog(upload_bytes: bytes | None):
+def init_catalog(upload_bytes):
     if upload_bytes is not None:
         raw = pd.read_csv(io.BytesIO(upload_bytes))
         tidy = clean_catalog(raw)
@@ -122,7 +125,6 @@ def read_catalog():
         df["sort_order"] = range(len(df))
     else:
         df["sort_order"] = pd.to_numeric(df["sort_order"], errors="coerce").fillna(range(len(df))).astype(int)
-    # Do NOT force alphabetical here
     return df[["item", "product_number", "current_qty", "sort_order"]].reset_index(drop=True)
 
 def write_catalog(df: pd.DataFrame):
@@ -142,26 +144,32 @@ def append_log(order_df: pd.DataFrame, orderer: str):
     df["ordered_at"] = now
     df["orderer"] = orderer
     prev = safe_read_csv(LOG_PATH)
-    expected_cols = ["item", "product_number", "qty", "ordered_at", "orderer"]
-    if prev.empty or not all(c in prev.columns for c in expected_cols):
-        prev = pd.DataFrame(columns=expected_cols)
-    combined = pd.concat([prev[expected_cols], df[expected_cols]], ignore_index=True)
+    expected = ORDER_LOG_COLUMNS
+    if prev.empty or not all(c in prev.columns for c in expected):
+        prev = pd.DataFrame(columns=expected)
+    # enforce dtypes
+    df["qty"] = pd.to_numeric(df["qty"], errors="coerce").fillna(0).astype(int)
+    combined = pd.concat([prev[expected], df[expected]], ignore_index=True)
     combined.to_csv(LOG_PATH, index=False)
     return now
 
 def load_last_order() -> pd.DataFrame:
     df = safe_read_csv(LAST_ORDER_PATH)
     if df.empty:
-        return pd.DataFrame(columns=["item", "product_number", "qty"])
-    for c in ["item", "product_number", "qty"]:
+        return pd.DataFrame(columns=LAST_ORDER_COLUMNS)
+    for c in LAST_ORDER_COLUMNS:
         if c not in df.columns:
             df[c] = pd.Series(dtype="object")
     df["qty"] = pd.to_numeric(df["qty"], errors="coerce").fillna(0).astype(int)
-    return df[["item", "product_number", "qty"]]
+    return df[LAST_ORDER_COLUMNS]
 
-def save_last_order(df: pd.DataFrame):
+def save_last_order(df: pd.DataFrame, orderer: str):
     try:
-        df[["item", "product_number", "qty"]].to_csv(LAST_ORDER_PATH, index=False)
+        out = df.copy()
+        out["generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        out["orderer"] = orderer
+        out = out[LAST_ORDER_COLUMNS]
+        out.to_csv(LAST_ORDER_PATH, index=False)
     except Exception as e:
         st.warning(f"Couldn't persist last order: {e}")
 
@@ -294,7 +302,7 @@ with tab_order:
     if cat.empty:
         st.info("No catalog yet. Initialize it from the sidebar.")
     else:
-        # Show last generated order list so the next person sees it too
+        # Show last generated order list with date/user columns
         last_order_df = load_last_order()
         if not last_order_df.empty:
             st.markdown("**Last generated order (persists across sessions):**")
@@ -304,12 +312,14 @@ with tab_order:
             "Who is placing the order?",
             options=(people if people else ["(add names in sidebar)"]),
         )
-
         search = st.text_input("Search items")
 
         # Merge last-ordered info into catalog
         loi = last_order_info_map()
         table = cat.merge(loi, on=["item", "product_number"], how="left")
+
+        # Convert last_ordered_at BEFORE sorting to make sort work reliably
+        table["last_ordered_at"] = pd.to_datetime(table.get("last_ordered_at"), errors="coerce")
 
         # Sorting choices (NOT forced A→Z)
         sort_choice = st.selectbox(
@@ -326,20 +336,23 @@ with tab_order:
         if sort_choice == "Original order":
             table = table.sort_values(["sort_order", "item"], kind="stable")
         elif sort_choice == "Last ordered (newest first)":
-            table = table.sort_values(["last_ordered_at"], ascending=[False], kind="stable")
+            # Fill NaT with very old date so "never ordered" items sink to bottom
+            sort_key = table["last_ordered_at"].fillna(pd.Timestamp("1900-01-01"))
+            table = table.iloc[sort_key.sort_values(ascending=False).index]
         elif sort_choice == "Last ordered (oldest first)":
-            table = table.sort_values(["last_ordered_at"], ascending=[True], kind="stable")
+            # Fill NaT with far-future date so "never ordered" items sink to bottom
+            sort_key = table["last_ordered_at"].fillna(pd.Timestamp("2999-12-31"))
+            table = table.iloc[sort_key.sort_values(ascending=True).index]
         elif sort_choice == "Product # asc":
             table = table.sort_values(["product_number", "item"], kind="stable")
         elif sort_choice == "Name A→Z":
             table = table.sort_values(["item"], kind="stable")
 
-        # Search filter
+        # Search filter (after sorting keeps predictable positions)
         if search:
             table = table[table["item"].str.contains(search, case=False, na=False)]
 
         # Prepare columns for UI
-        table["last_ordered_at"] = pd.to_datetime(table.get("last_ordered_at"), errors="coerce")
         table["last_qty"] = pd.to_numeric(table.get("last_qty"), errors="coerce")
         table["select"] = False
         table["qty"] = 0
@@ -377,8 +390,12 @@ with tab_order:
                 st.success("Order list created.")
                 st.dataframe(order_df, use_container_width=True, hide_index=True)
 
-                # Persist for next person/session
-                save_last_order(order_df)
+                # Persist for next person/session with date & user
+                if not people or orderer == "(add names in sidebar)":
+                    st.warning("Tip: Add/select an orderer in the sidebar so the saved list shows who generated it.")
+                    save_last_order(order_df, orderer="(unknown)")
+                else:
+                    save_last_order(order_df, orderer=orderer)
 
                 # Download & copy-paste helpers
                 csv_bytes = order_df.to_csv(index=False).encode("utf-8")
@@ -409,7 +426,7 @@ with tab_order:
         # Tools
         with st.expander("Tools"):
             if st.button("Clear last generated order"):
-                pd.DataFrame(columns=["item", "product_number", "qty"]).to_csv(LAST_ORDER_PATH, index=False)
+                pd.DataFrame(columns=LAST_ORDER_COLUMNS).to_csv(LAST_ORDER_PATH, index=False)
                 st.success("Cleared last order list.")
 
 # --- Logs tab ---
@@ -426,4 +443,3 @@ with tab_logs:
         )
     else:
         st.info("No orders logged yet.")
-        
