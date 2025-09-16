@@ -397,4 +397,33 @@ with tab_order:
                         st.error("Please add/select an orderer in the sidebar first.")
                     else:
                         now = append_log(order_df, orderer)
-                        st.success(f"Order log
+                        st.success(f"Order logged at {now}.")
+                        if st.checkbox("Decrement inventory by ordered qty"):
+                            cat2 = cat.copy()
+                            for _, r in order_df.iterrows():
+                                idx = cat2.index[cat2["item"] == r["item"]][0]
+                                cat2.loc[idx, "current_qty"] = max(0, int(cat2.loc[idx, "current_qty"]) - int(r["qty"]))
+                            write_catalog(cat2)
+                            st.info("Inventory updated.")
+
+        # Tools
+        with st.expander("Tools"):
+            if st.button("Clear last generated order"):
+                pd.DataFrame(columns=["item", "product_number", "qty"]).to_csv(LAST_ORDER_PATH, index=False)
+                st.success("Cleared last order list.")
+
+# --- Logs tab ---
+with tab_logs:
+    st.subheader("Order Logs")
+    logs = safe_read_csv(LOG_PATH)
+    if not logs.empty:
+        st.dataframe(logs.sort_values("ordered_at", ascending=False), use_container_width=True, hide_index=True)
+        st.download_button(
+            "⬇️ Download full log (CSV)",
+            data=logs.to_csv(index=False).encode("utf-8"),
+            file_name="order_log.csv",
+            mime="text/csv",
+        )
+    else:
+        st.info("No orders logged yet.")
+        
