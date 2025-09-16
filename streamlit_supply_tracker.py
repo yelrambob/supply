@@ -11,7 +11,9 @@ DATA_DIR.mkdir(exist_ok=True)
 CATALOG_PATH = DATA_DIR / 'catalog.csv'
 LOG_PATH = DATA_DIR / 'order_log.csv'
 PEOPLE_PATH = DATA_DIR / 'people.txt'
+LAST_ORDER_PATH = DATA_DIR / 'last_order.csv'
 
+# ---------- Utilities ----------
 def clean_catalog(df: pd.DataFrame) -> pd.DataFrame:
     tidy_rows = []
     cols = df.columns.tolist()
@@ -83,10 +85,43 @@ def write_catalog(df: pd.DataFrame):
     df = df.sort_values('item').reset_index(drop=True)
     df.to_csv(CATALOG_PATH, index=False)
 
+def append_log(order_df: pd.DataFrame, orderer: str):
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    df = order_df.copy()
+    df['ordered_at'] = now
+    df['orderer'] = orderer
+    if LOG_PATH.exists():
+        prev = pd.read_csv(LOG_PATH)
+        combined = pd.concat([prev, df], ignore_index=True)
+    else:
+        combined = df
+    combined.to_csv(LOG_PATH, index=False)
+    return now
+
+def load_last_order() -> pd.DataFrame:
+    if LAST_ORDER_PATH.exists():
+        return pd.read_csv(LAST_ORDER_PATH)
+    return pd.DataFrame(columns=['item','product_number','qty'])
+
+def save_last_order(df: pd.DataFrame):
+    df[['item','product_number','qty']].to_csv(LAST_ORDER_PATH, index=False)
+
+def last_order_info_map() -> pd.DataFrame:
+    if not LOG_PATH.exists():
+        return pd.DataFrame(columns=['item','last_ordered_at','last_qty'])
+    logs = pd.read_csv(LOG_PATH)
+    if 'ordered_at' in logs.columns:
+        logs['ordered_at'] = pd.to_datetime(logs['ordered_at'], errors='coerce')
+    idx = logs.sort_values('ordered_at').groupby('item', as_index=False).tail(1)
+    return idx[['item','ordered_at','qty']].rename(columns={'ordered_at':'last_ordered_at','qty':'last_qty'})
+
+# ---------- Sidebar: Setup & People ----------
 st.sidebar.header('Setup')
 uploaded = st.sidebar.file_uploader('Upload supply list (CSV)', type=['csv'], help='Your wide or tidy CSV.')
 if st.sidebar.button('Initialize / Replace Catalog'):
     init_catalog(uploaded.getvalue() if uploaded is not None else None)
+    st.cache_data.clear()
+    st.rerun()
 
 st.sidebar.divider()
 st.sidebar.subheader('Orderers')
@@ -106,6 +141,7 @@ if people:
         st.sidebar.success(f"Removed '{remove_person}'")
         st.rerun()
 
+# ---------- Main ----------
 st.title('📦 Supply Ordering & Inventory Tracker')
 
 tab_order, tab_inventory, tab_catalog, tab_logs = st.tabs(['Create Order','Adjust Inventory','Edit Catalog','Order Logs'])
@@ -173,50 +209,72 @@ with tab_order:
     if cat.empty:
         st.info('No catalog yet. Initialize it from the sidebar.')
     else:
+        if LAST_ORDER_PATH.exists():
+            st.markdown('**Last generated order (persists across sessions):**')
+            last_order_df = load_last_order()
+            st.dataframe(last_order_df, use_container_width=True, hide_index=True)
+
         orderer = st.selectbox('Who is placing the order?', options=(people if people else ['(add names in sidebar)']))
         search = st.text_input('Search items')
         filtered = cat[cat['item'].str.contains(search, case=False, na=False)] if search else cat
-        with st.container(border=True):
-            st.markdown('**Select items and set quantities**')
-            selected_items = st.multiselect('Items', filtered['item'].tolist())
-            quantities = {}
-            for item in selected_items:
-                row = cat[cat['item'] == item].iloc[0]
-                quantities[item] = st.number_input(f"Qty for '{item}' (#{row['product_number']})", min_value=1, value=1, step=1, key=f'qty_{item}')
-            if st.button('🧾 Generate Order List'):
-                if not selected_items:
-                    st.error('Please select at least one item.')
-                else:
-                    rows = []
-                    for item in selected_items:
-                        row = cat[cat['item'] == item].iloc[0]
-                        rows.append({'item': item, 'product_number': row['product_number'], 'qty': int(quantities[item])})
-                    order_df = pd.DataFrame(rows, columns=['item','product_number','qty'])
-                    st.success('Order list created.')
-                    st.dataframe(order_df, use_container_width=True, hide_index=True)
-                    csv_bytes = order_df.to_csv(index=False).encode('utf-8')
-                    st.download_button('⬇️ Download CSV', data=csv_bytes, file_name=f"order_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", mime='text/csv')
-                    txt_lines = [f"{r['item']} — {r['product_number']} — Qty {r['qty']}" for _, r in order_df.iterrows()]
-                    st.text_area('Copy-paste for your other system', value='\n'.join(txt_lines), height=150)
-                    if st.button('📝 Log this order'):
-                        now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                        logged = order_df.copy()
-                        logged['ordered_at'] = now
-                        logged['orderer'] = orderer
-                        if LOG_PATH.exists():
-                            prev = pd.read_csv(LOG_PATH)
-                            combined = pd.concat([prev, logged], ignore_index=True)
-                        else:
-                            combined = logged
-                        combined.to_csv(LOG_PATH, index=False)
-                        st.success(f'Order logged at {now}.')
-                        if st.checkbox('Decrement inventory by ordered qty'):
-                            cat2 = cat.copy()
-                            for _, r in order_df.iterrows():
-                                idx = cat2.index[cat2['item'] == r['item']][0]
-                                cat2.loc[idx, 'current_qty'] = max(0, int(cat2.loc[idx, 'current_qty']) - int(r['qty']))
-                            cat2.to_csv(CATALOG_PATH, index=False)
-                            st.info('Inventory updated.')
+
+        loi = last_order_info_map()
+        table = filtered.merge(loi, on='item', how='left')
+        table['last_ordered_at'] = pd.to_datetime(table['last_ordered_at'], errors='coerce')
+        table['last_qty'] = pd.to_numeric(table['last_qty'], errors='coerce')
+        table['select'] = False
+        table['qty'] = 0
+
+        prev = load_last_order()
+        if not prev.empty:
+            prev_map = { (r['item'], str(r['product_number'])): int(r['qty']) for _, r in prev.iterrows() }
+            for i, r in table.iterrows():
+                key = (r['item'], str(r['product_number']))
+                if key in prev_map:
+                    table.at[i, 'select'] = True
+                    table.at[i, 'qty'] = int(prev_map[key])
+
+        show_cols = ['select','qty','item','product_number','last_ordered_at','last_qty']
+        edited = st.data_editor(
+            table[show_cols],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                'select': st.column_config.CheckboxColumn('Select'),
+                'qty': st.column_config.NumberColumn('Qty', min_value=0, step=1),
+                'item': st.column_config.TextColumn('Item', disabled=True),
+                'product_number': st.column_config.TextColumn('Product #', disabled=True),
+                'last_ordered_at': st.column_config.DatetimeColumn('Last ordered', format='YYYY-MM-DD HH:mm', disabled=True),
+                'last_qty': st.column_config.NumberColumn('Last qty', disabled=True),
+            },
+        )
+
+        if st.button('🧾 Generate Order List'):
+            chosen = edited[(edited['select']) & (edited['qty'] > 0)].copy()
+            if chosen.empty:
+                st.error('Please check items and set Qty > 0.')
+            else:
+                order_df = chosen[['item','product_number','qty']].copy()
+                st.success('Order list created.')
+                st.dataframe(order_df, use_container_width=True, hide_index=True)
+                save_last_order(order_df)
+
+                csv_bytes = order_df.to_csv(index=False).encode('utf-8')
+                st.download_button('⬇️ Download CSV', data=csv_bytes, file_name=f"order_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", mime='text/csv')
+
+                txt_lines = [f"{r['item']} — {r['product_number']} — Qty {r['qty']}" for _, r in order_df.iterrows()]
+                st.text_area('Copy-paste for your other system', value='\n'.join(txt_lines), height=150)
+
+                if st.button('📝 Log this order'):
+                    now = append_log(order_df, orderer)
+                    st.success(f'Order logged at {now}.')
+                    if st.checkbox('Decrement inventory by ordered qty'):
+                        cat2 = cat.copy()
+                        for _, r in order_df.iterrows():
+                            idx = cat2.index[cat2['item'] == r['item']][0]
+                            cat2.loc[idx, 'current_qty'] = max(0, int(cat2.loc[idx, 'current_qty']) - int(r['qty']))
+                        cat2.to_csv(CATALOG_PATH, index=False)
+                        st.info('Inventory updated.')
 
 with tab_logs:
     st.subheader('Order Logs')
