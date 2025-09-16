@@ -124,7 +124,7 @@ def read_catalog():
     if "sort_order" not in df.columns or df["sort_order"].isna().all():
         df["sort_order"] = range(len(df))
     else:
-        df["sort_order"] = pd.to_numeric(df["sort_order"], errors="coerce").fillna(range(len(df))).astype(int)
+        df["sort_order"] = pd.to_numeric(df["sort_order"], errors="coerce").fillna(pd.Series(range(len(df)), index=df.index)).astype(int)
     return df[["item", "product_number", "current_qty", "sort_order"]].reset_index(drop=True)
 
 def write_catalog(df: pd.DataFrame):
@@ -135,7 +135,7 @@ def write_catalog(df: pd.DataFrame):
         df["sort_order"] = range(len(df))
     df["product_number"] = pd.to_numeric(df["product_number"], errors="coerce").astype("Int64")
     df["current_qty"] = pd.to_numeric(df["current_qty"], errors="coerce").fillna(0).astype(int)
-    df["sort_order"] = pd.to_numeric(df["sort_order"], errors="coerce").fillna(range(len(df))).astype(int)
+    df["sort_order"] = pd.to_numeric(df["sort_order"], errors="coerce").fillna(pd.Series(range(len(df)), index=df.index)).astype(int)
     df.to_csv(CATALOG_PATH, index=False)
 
 def append_log(order_df: pd.DataFrame, orderer: str):
