@@ -139,17 +139,41 @@ def write_catalog(df: pd.DataFrame):
     df.to_csv(CATALOG_PATH, index=False)
 
 def append_log(order_df: pd.DataFrame, orderer: str):
+    """
+    Append new rows to order_log.csv and drop exact duplicates.
+    A duplicate = same (item, product_number, qty, ordered_at, orderer).
+    """
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # New rows (one per line item ordered)
     df = order_df.copy()
     df["ordered_at"] = now
     df["orderer"] = orderer
-    prev = safe_read_csv(LOG_PATH)
-    expected = ORDER_LOG_COLUMNS
-    if prev.empty or not all(c in prev.columns for c in expected):
-        prev = pd.DataFrame(columns=expected)
-    # enforce dtypes
     df["qty"] = pd.to_numeric(df["qty"], errors="coerce").fillna(0).astype(int)
-    combined = pd.concat([prev[expected], df[expected]], ignore_index=True)
+
+    # Enforce column order/schema
+    expected = ["item", "product_number", "qty", "ordered_at", "orderer"]
+    df = df[expected]
+
+    # Load existing log (if any)
+    prev = safe_read_csv(LOG_PATH)
+    if not prev.empty:
+        # Make sure it has the expected columns
+        for c in expected:
+            if c not in prev.columns:
+                prev[c] = pd.NA
+        prev = prev[expected]
+
+        # Append + de-duplicate (exact row duplicates only)
+        combined = pd.concat([prev, df], ignore_index=True)
+        # Normalize dtypes before dedupe (helps avoid false mismatches)
+        combined["qty"] = pd.to_numeric(combined["qty"], errors="coerce").fillna(0).astype(int)
+        combined["product_number"] = pd.to_numeric(combined["product_number"], errors="coerce").astype("Int64")
+        combined.drop_duplicates(subset=expected, keep="first", inplace=True)
+    else:
+        combined = df
+
+    # Persist (keeps all old rows + new uniques)
     combined.to_csv(LOG_PATH, index=False)
     return now
 
