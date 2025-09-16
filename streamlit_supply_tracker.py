@@ -3,6 +3,7 @@ import pandas as pd
 import io
 from datetime import datetime
 from pathlib import Path
+from pandas.errors import EmptyDataError
 
 st.set_page_config(page_title='Supply Tracker', page_icon='📦', layout='wide')
 
@@ -13,8 +14,33 @@ LOG_PATH = DATA_DIR / 'order_log.csv'
 PEOPLE_PATH = DATA_DIR / 'people.txt'
 LAST_ORDER_PATH = DATA_DIR / 'last_order.csv'
 
+# ---------- Robust CSV helpers ----------
+def safe_read_csv(path: Path, **kwargs) -> pd.DataFrame:
+    try:
+        return pd.read_csv(path, **kwargs)
+    except FileNotFoundError:
+        return pd.DataFrame()
+    except EmptyDataError:
+        return pd.DataFrame()
+    except Exception as e:
+        st.warning(f"Couldn't read {path}: {e}")
+        return pd.DataFrame()
+
+def safe_ensure_file_with_header(path: Path, columns: list[str]):
+    # Create the CSV with headers if it doesn't exist or is empty.
+    try:
+        if (not path.exists()) or path.stat().st_size == 0:
+            pd.DataFrame(columns=columns).to_csv(path, index=False)
+    except Exception as e:
+        st.warning(f"Couldn't initialize {path}: {e}")
+
+# Initialize persistent files with headers
+safe_ensure_file_with_header(LAST_ORDER_PATH, ['item','product_number','qty'])
+# PEOPLE_PATH is a txt file; it will be created on write when needed.
+
 # ---------- Utilities ----------
 def clean_catalog(df: pd.DataFrame) -> pd.DataFrame:
+    # Turn a 'wide' sheet (name col + nearby numeric col) into tidy ['item','product_number']
     tidy_rows = []
     cols = df.columns.tolist()
     n = len(cols)
@@ -60,7 +86,7 @@ def init_catalog(upload: bytes | None):
         raw = pd.read_csv(io.BytesIO(upload))
         tidy = clean_catalog(raw)
         if tidy.empty:
-            st.error("Uploaded file couldn't be parsed into a catalog. Please check columns.")
+            st.error("Uploaded file couldn't be parsed into a catalog. Please check columns.')
         else:
             tidy = tidy.sort_values('item').reset_index(drop=True)
             tidy['current_qty'] = 0
@@ -72,9 +98,15 @@ def init_catalog(upload: bytes | None):
 
 @st.cache_data
 def read_catalog():
-    if CATALOG_PATH.exists():
-        return pd.read_csv(CATALOG_PATH)
-    return pd.DataFrame(columns=['item','product_number','current_qty'])
+    df = safe_read_csv(CATALOG_PATH)
+    if df.empty:
+        return pd.DataFrame(columns=['item','product_number','current_qty'])
+    for c in ['item','product_number','current_qty']:
+        if c not in df.columns:
+            df[c] = pd.Series(dtype='object')
+    df['product_number'] = pd.to_numeric(df['product_number'], errors='coerce').astype('Int64')
+    df['current_qty'] = pd.to_numeric(df['current_qty'], errors='coerce').fillna(0).astype(int)
+    return df[['item','product_number','current_qty']].sort_values('item').reset_index(drop=True)
 
 def write_catalog(df: pd.DataFrame):
     df = df.copy()
@@ -90,28 +122,40 @@ def append_log(order_df: pd.DataFrame, orderer: str):
     df = order_df.copy()
     df['ordered_at'] = now
     df['orderer'] = orderer
-    if LOG_PATH.exists():
-        prev = pd.read_csv(LOG_PATH)
-        combined = pd.concat([prev, df], ignore_index=True)
-    else:
+    prev = safe_read_csv(LOG_PATH)
+    if prev.empty:
         combined = df
+    else:
+        combined = pd.concat([prev, df], ignore_index=True)
     combined.to_csv(LOG_PATH, index=False)
     return now
 
 def load_last_order() -> pd.DataFrame:
-    if LAST_ORDER_PATH.exists():
-        return pd.read_csv(LAST_ORDER_PATH)
-    return pd.DataFrame(columns=['item','product_number','qty'])
+    df = safe_read_csv(LAST_ORDER_PATH)
+    if df.empty:
+        return pd.DataFrame(columns=['item','product_number','qty'])
+    for c in ['item','product_number','qty']:
+        if c not in df.columns:
+            df[c] = pd.Series(dtype='object')
+    df['qty'] = pd.to_numeric(df['qty'], errors='coerce').fillna(0).astype(int)
+    return df[['item','product_number','qty']]
 
 def save_last_order(df: pd.DataFrame):
-    df[['item','product_number','qty']].to_csv(LAST_ORDER_PATH, index=False)
+    try:
+        df[['item','product_number','qty']].to_csv(LAST_ORDER_PATH, index=False)
+    except Exception as e:
+        st.warning(f"Couldn't persist last order: {e}")
 
 def last_order_info_map() -> pd.DataFrame:
-    if not LOG_PATH.exists():
+    logs = safe_read_csv(LOG_PATH)
+    needed = ['item','ordered_at','qty']
+    if logs.empty or not all(c in logs.columns for c in needed):
         return pd.DataFrame(columns=['item','last_ordered_at','last_qty'])
-    logs = pd.read_csv(LOG_PATH)
-    if 'ordered_at' in logs.columns:
-        logs['ordered_at'] = pd.to_datetime(logs['ordered_at'], errors='coerce')
+    logs['ordered_at'] = pd.to_datetime(logs['ordered_at'], errors='coerce')
+    logs['qty'] = pd.to_numeric(logs['qty'], errors='coerce')
+    logs = logs.dropna(subset=['ordered_at'])
+    if logs.empty:
+        return pd.DataFrame(columns=['item','last_ordered_at','last_qty'])
     idx = logs.sort_values('ordered_at').groupby('item', as_index=False).tail(1)
     return idx[['item','ordered_at','qty']].rename(columns={'ordered_at':'last_ordered_at','qty':'last_qty'})
 
@@ -209,9 +253,9 @@ with tab_order:
     if cat.empty:
         st.info('No catalog yet. Initialize it from the sidebar.')
     else:
-        if LAST_ORDER_PATH.exists():
+        last_order_df = load_last_order()
+        if not last_order_df.empty:
             st.markdown('**Last generated order (persists across sessions):**')
-            last_order_df = load_last_order()
             st.dataframe(last_order_df, use_container_width=True, hide_index=True)
 
         orderer = st.selectbox('Who is placing the order?', options=(people if people else ['(add names in sidebar)']))
@@ -225,9 +269,8 @@ with tab_order:
         table['select'] = False
         table['qty'] = 0
 
-        prev = load_last_order()
-        if not prev.empty:
-            prev_map = { (r['item'], str(r['product_number'])): int(r['qty']) for _, r in prev.iterrows() }
+        if not last_order_df.empty:
+            prev_map = {(r['item'], str(r['product_number'])): int(r['qty']) for _, r in last_order_df.iterrows()}
             for i, r in table.iterrows():
                 key = (r['item'], str(r['product_number']))
                 if key in prev_map:
@@ -278,8 +321,8 @@ with tab_order:
 
 with tab_logs:
     st.subheader('Order Logs')
-    if LOG_PATH.exists():
-        logs = pd.read_csv(LOG_PATH)
+    logs = safe_read_csv(LOG_PATH)
+    if not logs.empty:
         st.dataframe(logs.sort_values('ordered_at', ascending=False), use_container_width=True, hide_index=True)
         st.download_button('⬇️ Download full log (CSV)', data=logs.to_csv(index=False).encode('utf-8'), file_name='order_log.csv', mime='text/csv')
     else:
