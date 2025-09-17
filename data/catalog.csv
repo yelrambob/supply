@@ -1,4 +1,4 @@
-item,product_number,current_qty,per_box_qty,sort_order
+item,product number
 Xtra Small Nitrile Gloves,179887,,,,,,
 Small Nitrile Gloves,48730,,,,,,
 Medium Nitrile Gloves,48731,,,,,,
@@ -179,8 +179,8 @@ Optiray 320mg ,39346,,,,,,
 150ml Saline,23074,,,,,,
 250ml Saline,23075,,,,,,
 500ml Saline,23077,,,,,,
-Sterile Saline Flush Syringe ,109030,,,,,,
-Saline Flush 10 ml Syringe ,64305,,,,,,
+Sterile Saline Flush Syringe,109030,,,,,,
+Saline Flush 10 ml Syringe,64305,,,,,,
 0.9% sodium chloride 10ml,24139,,,,,,
 Sweet Ease ,63068,,,,,,
 Lifepak paper,104257,,,,,,
