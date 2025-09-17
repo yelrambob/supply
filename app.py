@@ -51,16 +51,23 @@ def safe_read_csv(path: Path, **kwargs) -> pd.DataFrame:
         st.warning(f"Could not read {path.name}: {e}")
         return pd.DataFrame()
 
+def _norm_colname(c: str) -> str:
+    # Normalize headers: trim, lowercase, replace separators with underscores, collapse repeats
+    c = str(c).lstrip("\ufeff").strip().lower()
+    for ch in [" ", "-", "/", "\\", ".", ",", ":", ";", "\t"]:
+        c = c.replace(ch, "_")
+    while "__" in c:
+        c = c.replace("__", "_")
+    return c.strip("_")
+
 def _best_text_col(df: pd.DataFrame, prefer: list[str]) -> str | None:
-    # prefer explicit names if present
     for p in prefer:
         if p in df.columns:
             return p
-    # otherwise choose the column with the most non-empty strings
+    # otherwise choose the column with the most non-empty values
     best, best_count = None, -1
     for c in df.columns:
-        s = df[c]
-        # count “real” values (not NaN/empty/whitespace/"nan")
+        s = df[c].astype(object).where(pd.notnull(df[c]), "")
         cnt = s.astype(str).str.strip().replace({"nan":"", "NaN":"", "None":""}).ne("").sum()
         if cnt > best_count:
             best, best_count = c, cnt
@@ -72,25 +79,30 @@ def load_catalog() -> pd.DataFrame:
     if raw.empty:
         return pd.DataFrame(columns=["item", "product_number", "current_qty", "per_box_qty", "sort_order"])
 
-    # Normalize headers
-    raw.columns = [str(c).strip().lower() for c in raw.columns]
+    # Normalize headers robustly
+    raw.columns = [_norm_colname(c) for c in raw.columns]
 
-    # Drop columns that are entirely empty/NaN
+    # Drop fully-empty columns
     raw = raw.dropna(axis=1, how="all")
 
-    # Pick item / product_number columns robustly
+    # Prefer common names; "product number" becomes "product_number" via normalization
     item_col = _best_text_col(raw, ["item", "items", "name", "description", "desc"])
-    pn_col   = _best_text_col(raw, ["product_number", "product no", "productno", "sku", "id", "code", "pn"])
+    pn_col   = _best_text_col(
+        raw,
+        [
+            "product_number", "product_no", "productnum", "product_num", "productno",
+            "productid", "product_id", "sku", "code", "id", "pn"
+        ],
+    )
 
     if not item_col or not pn_col or item_col == pn_col:
         st.error(
             "Could not reliably detect `item` and `product_number` in data/catalog.csv.\n"
-            "Ensure at least two columns exist: one for item names and one for product numbers."
+            "Ensure two columns exist: item name and product number."
         )
         return pd.DataFrame(columns=["item", "product_number", "current_qty", "per_box_qty", "sort_order"])
 
     def clean_series(s: pd.Series) -> pd.Series:
-        # Preserve NaN as empty strings (not the literal "nan")
         s = s.astype(object).where(pd.notnull(s), "")
         s = s.apply(lambda x: x if isinstance(x, str) else str(x))
         s = s.str.strip().replace({"nan":"", "NaN":"", "None":""})
@@ -103,22 +115,19 @@ def load_catalog() -> pd.DataFrame:
 
     # Optional columns
     for opt in ["current_qty", "per_box_qty", "sort_order"]:
-        if opt in raw.columns:
-            out[opt] = raw[opt]
-        else:
-            out[opt] = None
+        out[opt] = raw[opt] if opt in raw.columns else None
 
-    # Remove rows without essential fields
+    # Drop rows missing essentials
     out = out[(out["item"] != "") & (out["product_number"] != "")]
     if out.empty:
         st.error("`catalog.csv` loaded but has no usable rows after cleanup (blank item names or product numbers).")
         return pd.DataFrame(columns=["item", "product_number", "current_qty", "per_box_qty", "sort_order"])
 
-    # Coerce sort_order for stable sort
+    # Stable sort
     out["sort_order"] = pd.to_numeric(out["sort_order"], errors="coerce")
     out = out.sort_values(by=["sort_order", "item"], ascending=[True, True], na_position="last").reset_index(drop=True)
 
-    # Ensure product_number is string
+    # Ensure product_number treated as string
     out["product_number"] = clean_series(out["product_number"])
     return out[["item", "product_number", "current_qty", "per_box_qty", "sort_order"]]
 
@@ -136,7 +145,7 @@ def load_emails() -> pd.DataFrame:
     df = safe_read_csv(EMAILS_PATH)
     if df.empty:
         return pd.DataFrame(columns=["name", "email"])
-    df.columns = [c.strip().lower() for c in df.columns]
+    df.columns = [_norm_colname(c) for c in df.columns]
     if "email" not in df.columns:
         return pd.DataFrame(columns=["name", "email"])
     if "name" not in df.columns:
@@ -290,10 +299,9 @@ def render_row(row, i: int):
         st.caption("Per Box")
     with col4:
         # Unique widget key per row to avoid DuplicateElementKey,
-        # but keep central state per product_number.
+        # while syncing central qty per product_number.
         widget_key = f"qty_{pn}_{i}"
         if widget_key not in st.session_state:
-            # initialize widget from central qty store
             st.session_state[widget_key] = int(st.session_state["qty"].get(pn, 0) or 0)
         new_val = st.number_input("Order Qty", key=widget_key, min_value=0, step=1, label_visibility="collapsed")
         st.session_state["qty"][pn] = int(new_val or 0)
@@ -391,7 +399,6 @@ if log_btn:
         for _, r in catalog.iterrows():
             pn = str(r["product_number"])
             st.session_state["qty"][pn] = 0
-            # clear any widget keys for this pn (optional, harmless if left)
         # Clear visible widgets in the current view so the UI resets
         for i, (_, r) in enumerate(view.iterrows()):
             pn = str(r["product_number"])
