@@ -54,9 +54,13 @@ def safe_read_csv(path: Path, **kwargs) -> pd.DataFrame:
         return pd.read_csv(path, **kwargs)
     except (FileNotFoundError, EmptyDataError):
         return pd.DataFrame()
-    except Exception as e:
-        st.warning(f"Couldn't read {path}: {e}")
-        return pd.DataFrame()
+    except Exception:
+        # Fallback: infer delimiter with the Python engine
+        try:
+            return pd.read_csv(path, sep=None, engine="python", **kwargs)
+        except Exception as e2:
+            st.warning(f"Couldn't read {path}: {e2}")
+            return pd.DataFrame()
 
 def safe_ensure_file_with_header(path: Path, columns):
     """Create CSV with headers if missing or empty."""
@@ -305,10 +309,23 @@ def init_catalog(upload_bytes):
 
 @st.cache_data
 def read_catalog():
+    # 1) initial read
     df = safe_read_csv(CATALOG_PATH)
+
+    # 2) If "empty by content", try seeding from defaults, then re-read once
+    need_seed = df.empty
+    if (need_seed and DEFAULT_CATALOG.exists()):
+        try:
+            copy2(DEFAULT_CATALOG, CATALOG_PATH)
+            df = safe_read_csv(CATALOG_PATH)  # re-read after seeding
+        except Exception as e:
+            st.warning(f"Seeding catalog from defaults failed: {e}")
+
+    # 3) If still empty, return proper columns so UI doesn't crash
     if df.empty:
         return pd.DataFrame(columns=CATALOG_COLUMNS)
-    # Ensure required columns exist
+
+    # 4) Normalize columns / types
     for c in CATALOG_COLUMNS:
         if c not in df.columns:
             if c == "current_qty":
@@ -319,23 +336,17 @@ def read_catalog():
                 df[c] = range(len(df))
             else:
                 df[c] = pd.NA
-    df["product_number"] = pd.to_numeric(df["product_number"], errors="coerce").astype("Int64")
-    df["current_qty"]   = pd.to_numeric(df["current_qty"],   errors="coerce").fillna(0).astype(int)
-    df["per_box_qty"]   = pd.to_numeric(df["per_box_qty"],   errors="coerce").fillna(1).astype(int)
 
-    # Handle sort_order with an index-aligned filler
-    if "sort_order" not in df.columns:
-        df["sort_order"] = pd.Series(range(len(df)), index=df.index)
-    else:
-        so = pd.to_numeric(df["sort_order"], errors="coerce")
-        filler = pd.Series(range(len(df)), index=df.index)
-        so = so.fillna(filler)
-        try:
-            df["sort_order"] = so.astype(int)
-        except ValueError:
-            df["sort_order"] = filler.astype(int)
+    df["product_number"] = pd.to_numeric(df["product_number"], errors="coerce").astype("Int64")
+    df["current_qty"]    = pd.to_numeric(df["current_qty"],    errors="coerce").fillna(0).astype(int)
+    df["per_box_qty"]    = pd.to_numeric(df["per_box_qty"],    errors="coerce").fillna(1).astype(int)
+
+    so = pd.to_numeric(df.get("sort_order"), errors="coerce")
+    filler = pd.Series(range(len(df)), index=df.index)
+    df["sort_order"] = so.fillna(filler).astype(int)
 
     return df[CATALOG_COLUMNS].reset_index(drop=True)
+
 
 def write_catalog(df: pd.DataFrame):
     df = df.copy()
@@ -475,7 +486,18 @@ with colB:
             st.sidebar.success(f"Saved to {DEFAULT_PEOPLE}")
         except Exception as e:
             st.sidebar.error(f"Save failed: {e}")
-
+#force seed 
+if st.sidebar.button("Force seed catalog from defaults", key="force_seed_catalog_btn"):
+    try:
+        if DEFAULT_CATALOG.exists():
+            copy2(DEFAULT_CATALOG, CATALOG_PATH)
+            st.sidebar.success("Catalog replaced from defaults.")
+            st.cache_data.clear()
+            st.rerun()
+        else:
+            st.sidebar.error("defaults/catalog.default.csv not found.")
+    except Exception as e:
+        st.sidebar.error(f"Force seed failed: {e}")
 # ---------- Main ----------
 st.title("📦 Supply Ordering & Inventory Tracker")
 
