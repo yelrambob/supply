@@ -151,7 +151,7 @@ def send_test_email(recipients_str: str) -> None:
     else:
         st.error(f"❌ Test email failed: {msg}")
     if st.button("Run Gmail self-test", key="smtp_selftest_btn"):
-    gmail_self_test()
+        gmail_self_test()
 
 # ---------- Utilities ----------
 def clean_catalog(df: pd.DataFrame) -> pd.DataFrame:
