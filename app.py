@@ -14,11 +14,12 @@ LOG_PATH = DATA_DIR / "order_log.csv"
 # ---------- Load ----------
 @st.cache_data
 def load_catalog():
-    df = pd.read_csv(CATALOG_PATH)
+    df = pd.read_csv(CATALOG_PATH, usecols=[0,1], names=["item", "product_number"], header=0)
     df = df.dropna(subset=["item", "product_number"])
     df["item"] = df["item"].astype(str)
     df["product_number"] = df["product_number"].astype(str)
     return df.reset_index(drop=True)
+
 
 @st.cache_data
 def load_people():
