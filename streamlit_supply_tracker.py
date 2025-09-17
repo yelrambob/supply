@@ -450,14 +450,42 @@ with tab_catalog:
                 st.rerun()
             else:
                 st.error("Please provide both Item and Product #.")
-    st.markdown("---")
-    if not cat.empty:
-        to_remove = st.multiselect("Select item(s) to remove", cat["item"].tolist(), key="catalog_remove_sel")
-        if st.button("🗑️ Remove selected", key="catalog_remove_selected_btn"):
-            updated = cat[~cat["item"].isin(to_remove)]
-            write_catalog(updated)
-            st.success(f"Removed {len(to_remove)} item(s).")
-            st.rerun()
+    # --- in the Catalog tab, replace the old "remove selected" block with this ---
+st.markdown("---")
+if not cat.empty:
+    import pandas as pd
+
+    # Build human-friendly labels and guard against NA values
+    cat_labels = cat.copy()
+    cat_labels = cat_labels.dropna(subset=["item"])  # remove rows with missing item names
+    def _label_row(r):
+        item = str(r.get("item", "")).strip()
+        pn = r.get("product_number", "")
+        # make product_number a clean string (avoid <NA>)
+        pn_str = "" if pd.isna(pn) else str(pn)
+        return f"{item} — {pn_str}"
+
+    cat_labels["label"] = cat_labels.apply(_label_row, axis=1)
+    options = [l for l in cat_labels["label"].tolist() if l and not l.startswith(" — ")]
+
+    to_remove = st.multiselect(
+        "Select item(s) to remove",
+        options,
+        key="catalog_remove_sel",
+    )
+
+    if st.button("🗑️ Remove selected", key="catalog_remove_selected_btn"):
+        sel = set(to_remove)
+
+        # Build the same label on the original DataFrame, then filter
+        labels_on_cat = cat.apply(_label_row, axis=1)
+        keep_mask = ~labels_on_cat.isin(sel)
+        updated = cat[keep_mask].copy()
+
+        write_catalog(updated)
+        st.success(f"Removed {len(cat) - len(updated)} item(s).")
+        st.rerun()
+
 
 # --- Inventory tab ---
 with tab_inventory:
