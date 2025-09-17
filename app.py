@@ -3,420 +3,447 @@ import pandas as pd
 from pandas.errors import EmptyDataError
 from datetime import datetime
 from pathlib import Path
-from shutil import copy2
 import io
 import smtplib, ssl
 from email.message import EmailMessage
 
 st.set_page_config(page_title="Supply Ordering", page_icon="📦", layout="wide")
 
-# ---------- Paths (absolute to this file) ----------
+# ---------------- Paths ----------------
 APP_DIR = Path(__file__).resolve().parent
 DATA_DIR = APP_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
 CATALOG_PATH = DATA_DIR / "catalog.csv"
-CATALOG_DEFAULT_PATH = DATA_DIR / "catalog.default.csv"
-PEOPLE_PATH = DATA_DIR / "people.txt"
-PEOPLE_DEFAULT_PATH = DATA_DIR / "people.default.txt"
-EMAILS_PATH = DATA_DIR / "emails.csv"
+LOG_PATH     = DATA_DIR / "order_log.csv"
+LAST_PATH    = DATA_DIR / "last_order.csv"
+PEOPLE_PATH  = DATA_DIR / "people.txt"
+EMAILS_PATH  = DATA_DIR / "emails.csv"
 
-ORDER_LOG_PATH = DATA_DIR / "order_log.csv"
 ORDER_LOG_COLUMNS = ["item", "product_number", "qty", "ordered_at", "orderer"]
+LAST_ORDER_COLUMNS = ["item", "product_number", "qty", "generated_at", "orderer"]
 
-# ---------- Seed files ----------
-def ensure_seed_files():
-    if (not CATALOG_PATH.exists()) or (CATALOG_PATH.stat().st_size == 0):
-        if CATALOG_DEFAULT_PATH.exists() and CATALOG_DEFAULT_PATH.stat().st_size > 0:
-            copy2(CATALOG_DEFAULT_PATH, CATALOG_PATH)
-    if (not PEOPLE_PATH.exists()) or (PEOPLE_PATH.stat().st_size == 0):
-        if PEOPLE_DEFAULT_PATH.exists() and PEOPLE_DEFAULT_PATH.stat().st_size > 0:
-            copy2(PEOPLE_DEFAULT_PATH, PEOPLE_PATH)
-
-# ---------- CSV helpers ----------
+# ---------------- Helpers: files ----------------
 def safe_read_csv(path: Path, **kwargs) -> pd.DataFrame:
-    if not path.exists() or path.stat().st_size == 0:
-        return pd.DataFrame()
     try:
-        return pd.read_csv(
-            path,
-            encoding="utf-8",
-            on_bad_lines="skip",
-            engine="python",
-            **kwargs
-        )
-    except EmptyDataError:
+        return pd.read_csv(path, **kwargs)
+    except (FileNotFoundError, EmptyDataError):
         return pd.DataFrame()
     except Exception as e:
-        st.warning(f"Could not read {path.name}: {e}")
+        st.warning(f"Couldn't read {path.name}: {e}")
         return pd.DataFrame()
 
-def _norm_colname(c: str) -> str:
-    # Normalize headers: trim, lowercase, replace separators with underscores, collapse repeats
-    c = str(c).lstrip("\ufeff").strip().lower()
-    for ch in [" ", "-", "/", "\\", ".", ",", ":", ";", "\t"]:
-        c = c.replace(ch, "_")
-    while "__" in c:
-        c = c.replace("__", "_")
-    return c.strip("_")
+def ensure_headers(path: Path, columns: list[str]):
+    if (not path.exists()) or path.stat().st_size == 0:
+        pd.DataFrame(columns=columns).to_csv(path, index=False)
 
-def _best_text_col(df: pd.DataFrame, prefer: list[str]) -> str | None:
-    for p in prefer:
-        if p in df.columns:
-            return p
-    # otherwise choose the column with the most non-empty values
-    best, best_count = None, -1
-    for c in df.columns:
-        s = df[c].astype(object).where(pd.notnull(df[c]), "")
-        cnt = s.astype(str).str.strip().replace({"nan":"", "NaN":"", "None":""}).ne("").sum()
-        if cnt > best_count:
-            best, best_count = c, cnt
-    return best
+ensure_headers(LOG_PATH, ORDER_LOG_COLUMNS)
+ensure_headers(LAST_PATH, LAST_ORDER_COLUMNS)
 
+# ---------------- SMTP ----------------
+def smtp_ok() -> bool:
+    try:
+        s = st.secrets["smtp"]
+        needed = ["server", "port", "username", "password", "from"]
+        return all(s.get(k) for k in needed)
+    except Exception:
+        return False
+
+def send_email(subject: str, body: str, to_emails: list[str]):
+    s = st.secrets["smtp"]
+    ctx = ssl.create_default_context()
+    msg = EmailMessage()
+    prefix = s.get("subject_prefix", "")
+    msg["Subject"] = f"{prefix}{subject}" if prefix else subject
+    msg["From"] = s["from"]
+    if s.get("reply_to"):
+        msg["Reply-To"] = s["reply_to"]
+    msg["To"] = ", ".join(to_emails)
+    msg.set_content(body)
+
+    with smtplib.SMTP_SSL(s["server"], int(s["port"]), context=ctx) as server:
+        server.login(s["username"], s["password"])
+        server.send_message(msg)
+
+# ---------------- Load core data ----------------
 @st.cache_data
-def load_catalog() -> pd.DataFrame:
-    raw = safe_read_csv(CATALOG_PATH, header=0)
-    if raw.empty:
-        return pd.DataFrame(columns=["item", "product_number", "current_qty", "per_box_qty", "sort_order"])
-
-    # Normalize headers robustly
-    raw.columns = [_norm_colname(c) for c in raw.columns]
-
-    # Drop fully-empty columns
-    raw = raw.dropna(axis=1, how="all")
-
-    # Prefer common names; "product number" becomes "product_number" via normalization
-    item_col = _best_text_col(raw, ["item", "items", "name", "description", "desc"])
-    pn_col   = _best_text_col(
-        raw,
-        [
-            "product_number", "product_no", "productnum", "product_num", "productno",
-            "productid", "product_id", "sku", "code", "id", "pn"
-        ],
-    )
-
-    if not item_col or not pn_col or item_col == pn_col:
-        st.error(
-            "Could not reliably detect `item` and `product_number` in data/catalog.csv.\n"
-            "Ensure two columns exist: item name and product number."
-        )
-        return pd.DataFrame(columns=["item", "product_number", "current_qty", "per_box_qty", "sort_order"])
-
-    def clean_series(s: pd.Series) -> pd.Series:
-        s = s.astype(object).where(pd.notnull(s), "")
-        s = s.apply(lambda x: x if isinstance(x, str) else str(x))
-        s = s.str.strip().replace({"nan":"", "NaN":"", "None":""})
-        return s
-
-    out = pd.DataFrame({
-        "item": clean_series(raw[item_col]),
-        "product_number": clean_series(raw[pn_col]),
-    })
-
-    # Optional columns
-    for opt in ["current_qty", "per_box_qty", "sort_order"]:
-        out[opt] = raw[opt] if opt in raw.columns else None
-
-    # Drop rows missing essentials
-    out = out[(out["item"] != "") & (out["product_number"] != "")]
-    if out.empty:
-        st.error("`catalog.csv` loaded but has no usable rows after cleanup (blank item names or product numbers).")
-        return pd.DataFrame(columns=["item", "product_number", "current_qty", "per_box_qty", "sort_order"])
-
-    # Stable sort
-    out["sort_order"] = pd.to_numeric(out["sort_order"], errors="coerce")
-    out = out.sort_values(by=["sort_order", "item"], ascending=[True, True], na_position="last").reset_index(drop=True)
-
-    # Ensure product_number treated as string
-    out["product_number"] = clean_series(out["product_number"])
-    return out[["item", "product_number", "current_qty", "per_box_qty", "sort_order"]]
-
-def load_people(path: Path) -> list:
-    if not path.exists() or path.stat().st_size == 0:
+def read_people() -> list[str]:
+    if not PEOPLE_PATH.exists():
         return []
     try:
-        return [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
+        return [ln.strip() for ln in PEOPLE_PATH.read_text(encoding="utf-8").splitlines() if ln.strip()]
     except Exception as e:
-        st.warning(f"Could not read people file: {e}")
+        st.warning(f"Couldn't read people.txt: {e}")
         return []
 
 @st.cache_data
-def load_emails() -> pd.DataFrame:
+def read_emails() -> pd.DataFrame:
     df = safe_read_csv(EMAILS_PATH)
     if df.empty:
         return pd.DataFrame(columns=["name", "email"])
-    df.columns = [_norm_colname(c) for c in df.columns]
+    # normalize cols
+    df.columns = [str(c).strip().lower() for c in df.columns]
     if "email" not in df.columns:
         return pd.DataFrame(columns=["name", "email"])
     if "name" not in df.columns:
         df["name"] = ""
     df["email"] = df["email"].astype(str).str.strip()
-    df = df[df["email"].str.contains("@", na=False)]
-    df = df.drop_duplicates(subset=["email"])
+    df = df[df["email"].str.contains("@", na=False)].drop_duplicates(subset=["email"])
     return df[["name", "email"]]
 
-def load_order_log() -> pd.DataFrame:
-    df = safe_read_csv(ORDER_LOG_PATH)
+@st.cache_data
+def read_catalog() -> pd.DataFrame:
+    df = safe_read_csv(CATALOG_PATH)
+    if df.empty:
+        return pd.DataFrame(columns=["item", "product_number", "current_qty", "sort_order"])
+    # normalize expected cols
+    for c in ["item", "product_number", "current_qty", "sort_order"]:
+        if c not in df.columns:
+            df[c] = pd.NA
+    # types
+    df["item"] = df["item"].astype(str).str.strip()
+    df["product_number"] = df["product_number"].astype(str).str.strip()
+    df["current_qty"] = pd.to_numeric(df["current_qty"], errors="coerce").fillna(0).astype(int)
+
+    so = pd.to_numeric(df["sort_order"], errors="coerce")
+    filler = pd.Series(range(len(df)), index=df.index)
+    df["sort_order"] = so.fillna(filler).astype(int)
+
+    # drop unusable rows
+    df = df[(df["item"] != "") & (df["product_number"] != "")]
+    return df[["item", "product_number", "current_qty", "sort_order"]].reset_index(drop=True)
+
+def write_catalog(df: pd.DataFrame):
+    df = df.copy()
+    df["current_qty"] = pd.to_numeric(df.get("current_qty", 0), errors="coerce").fillna(0).astype(int)
+    so = pd.to_numeric(df.get("sort_order", pd.Series(range(len(df)))), errors="coerce")
+    df["sort_order"] = so.fillna(pd.Series(range(len(df)), index=df.index)).astype(int)
+    df.to_csv(CATALOG_PATH, index=False)
+
+def read_log() -> pd.DataFrame:
+    df = safe_read_csv(LOG_PATH)
     if df.empty:
         return pd.DataFrame(columns=ORDER_LOG_COLUMNS)
     for c in ORDER_LOG_COLUMNS:
         if c not in df.columns:
-            df[c] = None
-    try:
-        df["ordered_at"] = pd.to_datetime(df["ordered_at"], errors="coerce")
-    except Exception:
-        pass
-    df = df.sort_values(by="ordered_at", ascending=False, na_position="last").reset_index(drop=True)
-    return df[ORDER_LOG_COLUMNS]
+            df[c] = pd.NA
+    df["ordered_at"] = pd.to_datetime(df["ordered_at"], errors="coerce")
+    df["qty"] = pd.to_numeric(df["qty"], errors="coerce").fillna(0).astype(int)
+    return df[ORDER_LOG_COLUMNS].sort_values("ordered_at", ascending=False)
 
-def save_order_log(new_rows: pd.DataFrame):
-    if ORDER_LOG_PATH.exists() and ORDER_LOG_PATH.stat().st_size > 0:
-        existing = safe_read_csv(ORDER_LOG_PATH)
-        combined = pd.concat([existing, new_rows], ignore_index=True)
+def append_log(order_df: pd.DataFrame, orderer: str) -> str:
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    df = order_df.copy()
+    df["ordered_at"] = now
+    df["orderer"] = orderer
+    expected = ORDER_LOG_COLUMNS
+    df = df[expected]
+
+    prev = safe_read_csv(LOG_PATH)
+    if not prev.empty:
+        for c in expected:
+            if c not in prev.columns:
+                prev[c] = pd.NA
+        combined = pd.concat([prev[expected], df], ignore_index=True)
     else:
-        combined = new_rows.copy()
-    combined.to_csv(ORDER_LOG_PATH, index=False)
+        combined = df
 
-# ---------- Email helpers ----------
-def email_enabled() -> bool:
-    try:
-        s = st.secrets["smtp"]
-        required = ["server", "port", "username", "password", "from"]
-        return all(k in s and s[k] for k in required)
-    except Exception:
-        return False
+    combined.to_csv(LOG_PATH, index=False)
+    return now
 
-def send_email(subject: str, body_text: str, to_emails: list, attachments: list = None):
-    s = st.secrets["smtp"]
-    context = ssl.create_default_context()
-    msg = EmailMessage()
-    msg["From"] = s["from"]
-    msg["To"] = ", ".join(to_emails)
-    if "reply_to" in s and s["reply_to"]:
-        msg["Reply-To"] = s["reply_to"]
-    prefix = s.get("subject_prefix", "")
-    msg["Subject"] = f"{prefix}{subject}" if prefix else subject
-    msg.set_content(body_text)
+def read_last() -> pd.DataFrame:
+    df = safe_read_csv(LAST_PATH)
+    if df.empty:
+        return pd.DataFrame(columns=LAST_ORDER_COLUMNS)
+    for c in LAST_ORDER_COLUMNS:
+        if c not in df.columns:
+            df[c] = pd.NA
+    df["qty"] = pd.to_numeric(df["qty"], errors="coerce").fillna(0).astype(int)
+    return df[LAST_ORDER_COLUMNS]
 
-    if attachments:
-        for fname, data_bytes, mimetype in attachments:
-            parts = mimetype.split("/", 1)
-            maintype = parts[0] if len(parts) > 0 else "application"
-            subtype = parts[1] if len(parts) > 1 else "octet-stream"
-            msg.add_attachment(data_bytes, maintype=maintype, subtype=subtype, filename=fname)
+def write_last(df: pd.DataFrame, orderer: str):
+    out = df.copy()
+    out["generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    out["orderer"] = orderer
+    out = out[LAST_ORDER_COLUMNS]
+    out.to_csv(LAST_PATH, index=False)
 
-    with smtplib.SMTP_SSL(s["server"], int(s["port"]), context=context) as server:
-        server.login(s["username"], s["password"])
-        server.send_message(msg)
+def last_info_map() -> pd.DataFrame:
+    logs = read_log()
+    if logs.empty:
+        return pd.DataFrame(columns=["item","product_number","last_ordered_at","last_qty","last_orderer"])
+    logs = logs.sort_values("ordered_at")
+    tail = logs.groupby(["item","product_number"], as_index=False).tail(1)
+    tail = tail.rename(columns={"ordered_at":"last_ordered_at","qty":"last_qty","orderer":"last_orderer"})
+    return tail[["item","product_number","last_ordered_at","last_qty","last_orderer"]]
 
-def df_to_csv_bytes(df: pd.DataFrame) -> bytes:
-    buf = io.StringIO()
-    df.to_csv(buf, index=False)
-    return buf.getvalue().encode("utf-8")
+# ---------------- UI ----------------
+st.title("📦 Supply Ordering & Inventory Tracker")
 
-# ---------- Init ----------
-ensure_seed_files()
-catalog = load_catalog()
-people = load_people(PEOPLE_PATH)
-emails_df = load_emails()
-order_log = load_order_log()
+people = read_people()
+emails_df = read_emails()
+catalog = read_catalog()
+logs = read_log()
+last_order_df = read_last()
 
-# Quick preview to confirm the list is loading
-st.caption(f"Loaded {len(catalog)} catalog rows from `{CATALOG_PATH.name}`.")
-if catalog.empty:
-    st.stop()
-st.dataframe(catalog.head(5), use_container_width=True, hide_index=True)
+# Quick info line
+st.caption(f"Loaded {len(catalog)} catalog rows • {len(logs)} log rows • Email configured: {'✅' if smtp_ok() else '❌'}")
 
-# Maintain qty state per product_number so it persists across searches/reruns
-if "qty" not in st.session_state:
-    st.session_state["qty"] = {}  # key: product_number (str) -> int
+tabs = st.tabs(["Create Order", "Adjust Inventory", "Catalog", "Order Logs"])
 
-# ---------- Header / Controls ----------
-left, mid, right = st.columns([3, 2, 2])
-with left:
-    st.title("📦 Supply Ordering")
-with mid:
-    orderer_options = people if people else [""]
-    orderer = st.selectbox("Who is ordering?", options=orderer_options, index=0)
-with right:
-    search = st.text_input("Search items", placeholder="Type to filter… (quantities persist)")
-
-# Apply filter (quantities remain in session state regardless)
-if search:
-    mask = catalog["item"].fillna("").str.contains(search, case=False, na=False)
-    view = catalog[mask].copy()
-else:
-    view = catalog.copy()
-
-# ---------- Current Cart (Top) ----------
-def current_cart_rows():
-    rows = []
-    # Use full catalog so items not in view still count
-    for _, r in catalog.iterrows():
-        pn = str(r["product_number"])
-        q = int(st.session_state["qty"].get(pn, 0) or 0)
-        if q > 0:
-            rows.append({"item": r["item"], "product_number": pn, "qty": q})
-    return rows
-
-cart_rows = current_cart_rows()
-cart_df = pd.DataFrame(cart_rows, columns=["item", "product_number", "qty"])
-total_items = int(cart_df["qty"].sum()) if not cart_df.empty else 0
-
-st.markdown(f"### 🧾 Current Cart — **{total_items} total**")
-cart_holder = st.empty()
-if not cart_df.empty:
-    cart_holder.dataframe(cart_df, use_container_width=True, hide_index=True)
-else:
-    cart_holder.info("No items selected yet. Add quantities below.")
-
-# ---------- Catalog (editable qty) ----------
-st.markdown("### Catalog")
-st.caption("Tip: Use the search box to filter. Quantities remain saved even when you change the search.")
-
-# Header row
-h1, h2, h3, h4 = st.columns([6, 2, 2, 2])
-with h1: st.markdown("**Item**")
-with h2: st.markdown("**Current**")
-with h3: st.markdown("**Per Box**")
-with h4: st.markdown("**Order Qty**")
-
-def render_row(row, i: int):
-    pn = str(row["product_number"])
-    item_name = str(row["item"])
-
-    col1, col2, col3, col4 = st.columns([6, 2, 2, 2])
-    with col1:
-        st.write(item_name)
-        st.caption(f"#{pn}")
-    with col2:
-        val = row.get("current_qty", "")
-        st.write("" if pd.isna(val) else str(val))
-        st.caption("Current Qty")
-    with col3:
-        val = row.get("per_box_qty", "")
-        st.write("" if pd.isna(val) else str(val))
-        st.caption("Per Box")
-    with col4:
-        # Unique widget key per row to avoid DuplicateElementKey,
-        # while syncing central qty per product_number.
-        widget_key = f"qty_{pn}_{i}"
-        if widget_key not in st.session_state:
-            st.session_state[widget_key] = int(st.session_state["qty"].get(pn, 0) or 0)
-        new_val = st.number_input("Order Qty", key=widget_key, min_value=0, step=1, label_visibility="collapsed")
-        st.session_state["qty"][pn] = int(new_val or 0)
-
-for i, (_, row) in enumerate(view.iterrows()):
-    with st.container(border=True):
-        render_row(row, i)
-
-st.divider()
-
-# ---------- Log & Email ----------
-def email_enabled_hint(enabled: bool):
-    if not enabled:
-        st.caption("Email disabled—configure `.streamlit/secrets.toml` with [smtp] to enable.")
-
-email_ok = email_enabled()
-recipients_df = emails_df.copy()
-recipient_list = recipients_df["email"].tolist() if not recipients_df.empty else []
-
-colA, colB = st.columns([1, 1])
-with colA:
-    email_toggle = st.checkbox("Email order to recipients in data/emails.csv",
-                               value=True if recipient_list else False,
-                               help="Uses SMTP settings from secrets.toml under [smtp]")
-with colB:
-    cc_orderer = st.checkbox("CC the orderer if found in emails.csv", value=True)
-
-email_enabled_hint(email_ok)
-
-log_btn = st.button("✅ Log Order (and Email)")
-
-if log_btn:
-    cart_rows = current_cart_rows()
-    if not cart_rows:
-        st.error("No items with quantity > 0 to log.")
-    else:
-        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        new_rows = []
-        for r in cart_rows:
-            new_rows.append({
-                "item": r["item"],
-                "product_number": r["product_number"],
-                "qty": int(r["qty"]),
-                "ordered_at": ts,
-                "orderer": orderer or ""
-            })
-        new_df = pd.DataFrame(new_rows, columns=ORDER_LOG_COLUMNS)
-
-        # Save to log
-        try:
-            save_order_log(new_df)
-            st.success(f"Logged {len(new_rows)} line(s) at {ts} by {orderer or 'Unknown'}")
-        except Exception as e:
-            st.error(f"Could not save order log: {e}")
-
-        # Email step
-        if email_toggle and email_ok:
-            to_emails = set(recipient_list)
-            if cc_orderer and orderer:
-                match = recipients_df[recipients_df["name"].str.strip().str.lower() == orderer.strip().lower()]
-                if not match.empty:
-                    to_emails.update(match["email"].tolist())
-            to_emails = [e for e in sorted(to_emails) if e]
-
-            if to_emails:
-                body_lines = [
-                    f"New supply order logged at {ts}",
-                    f"Ordered by: {orderer or 'Unknown'}",
-                    "",
-                    "Items:",
-                ] + [f"- {r['item']} (#{r['product_number']}): {r['qty']}" for r in cart_rows]
-                body_text = "\n".join(body_lines)
-
-                attach_bytes = df_to_csv_bytes(new_df)
-                attachments = [("order_log_entry.csv", attach_bytes, "text/csv")]
-
-                try:
-                    send_email(
-                        subject="Supply Order Logged",
-                        body_text=body_text,
-                        to_emails=to_emails,
-                        attachments=attachments
-                    )
-                    st.info(f"Emailed {len(to_emails)} recipient(s).")
-                except Exception as e:
-                    st.error(f"Could not send email: {e}")
-            else:
-                st.warning("No valid email recipients found in data/emails.csv.")
-        elif email_toggle and not email_ok:
-            st.warning("Email is enabled but SMTP settings are missing/invalid in secrets.toml [smtp].")
+# ---------- Create Order ----------
+with tabs[0]:
+    # Collapsible "last generated" block (so it doesn't clutter the top)
+    with st.expander("📋 Last generated order (copy/download)", expanded=False):
+        if last_order_df.empty:
+            st.info("No previous order.")
         else:
-            st.caption("Email step skipped.")
+            lines = [f"{r['item']} — {r['product_number']} — Qty {r['qty']}" for _, r in last_order_df.iterrows()]
+            meta = f"Generated at {last_order_df['generated_at'].iloc[0]} by {last_order_df['orderer'].iloc[0]}"
+            st.text_area("Copy/paste", value="\n".join(lines), height=160, key="order_copy_area")
+            st.caption(meta)
+            st.download_button(
+                "⬇️ Download CSV",
+                data=last_order_df[["item","product_number","qty"]].to_csv(index=False).encode("utf-8"),
+                file_name=f"order_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                key="order_download_btn",
+            )
 
-        # Reset all quantities after logging
-        for _, r in catalog.iterrows():
-            pn = str(r["product_number"])
-            st.session_state["qty"][pn] = 0
-        # Clear visible widgets in the current view so the UI resets
-        for i, (_, r) in enumerate(view.iterrows()):
-            pn = str(r["product_number"])
-            wkey = f"qty_{pn}_{i}"
-            if wkey in st.session_state:
-                st.session_state[wkey] = 0
+    if catalog.empty:
+        st.info("No catalog found. Put your list in data/catalog.csv (columns: item, product_number[, current_qty, sort_order]).")
+    else:
+        # Controls row
+        c1, c2, c3 = st.columns([2, 2, 2])
+        with c1:
+            orderer = st.selectbox(
+                "Who is ordering?",
+                options=(people if people else ["(add names in data/people.txt)"]),
+                index=0,
+                key="order_orderer",
+            )
+        with c2:
+            cc_orderer = st.checkbox("CC the orderer (if email match)", value=True, key="order_cc_orderer")
+        with c3:
+            search = st.text_input("Search items", key="order_search")
 
-        cart_holder.info("Cart cleared after logging. Add new quantities to create another order.")
-        order_log = load_order_log()
+        # Merge "last ordered" info for display/sort
+        last_map = last_info_map()
+        table = catalog.merge(last_map, on=["item","product_number"], how="left")
+        table["last_ordered_at"] = pd.to_datetime(table.get("last_ordered_at"), errors="coerce")
 
-# ---------- Recent Orders ----------
-st.markdown("### Recent Orders (Most Recent First)")
-if order_log.empty:
-    st.info("No orders logged yet.")
-else:
-    try:
-        order_log["ordered_at"] = pd.to_datetime(order_log["ordered_at"], errors="coerce")
-    except Exception:
-        pass
-    order_log = order_log.sort_values(by="ordered_at", ascending=False, na_position="last").reset_index(drop=True)
-    st.dataframe(order_log, use_container_width=True, hide_index=True)
+        # Sorting selector
+        sort_choice = st.selectbox(
+            "Sort by",
+            options=["Last ordered (newest first)", "Original order", "Name A→Z", "Product # asc"],
+            index=0,
+            key="order_sort",
+        )
+        if sort_choice == "Original order":
+            table = table.sort_values(["sort_order", "item"], kind="stable")
+        elif sort_choice == "Name A→Z":
+            table = table.sort_values(["item"], kind="stable")
+        elif sort_choice == "Product # asc":
+            table = table.sort_values(["product_number","item"], kind="stable")
+        else:  # newest first
+            key = table["last_ordered_at"].fillna(pd.Timestamp("1900-01-01"))
+            table = table.iloc[key.sort_values(ascending=False).index]
+
+        # Search filter
+        if search:
+            table = table[table["item"].str.contains(search, case=False, na=False)]
+
+        # Display spreadsheet-like table with a Qty column
+        table = table.copy()
+        table["qty"] = 0
+        show_cols = ["qty", "item", "product_number", "last_ordered_at", "last_qty", "last_orderer"]
+        edited = st.data_editor(
+            table[show_cols],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "qty": st.column_config.NumberColumn("Qty", min_value=0, step=1),
+                "item": st.column_config.TextColumn("Item", disabled=True),
+                "product_number": st.column_config.TextColumn("Product #", disabled=True),
+                "last_ordered_at": st.column_config.DatetimeColumn("Last ordered", format="YYYY-MM-DD HH:mm", disabled=True),
+                "last_qty": st.column_config.NumberColumn("Last qty", disabled=True),
+                "last_orderer": st.column_config.TextColumn("Last by", disabled=True),
+            },
+            key="order_editor",
+        )
+
+        # Buttons right under the table for quick access
+        b1, b2 = st.columns(2)
+
+        def _selected_from_editor(df: pd.DataFrame) -> pd.DataFrame:
+            chosen = df[df["qty"] > 0].copy()
+            if chosen.empty:
+                st.error("Please set Qty > 0 for at least one item.")
+                return pd.DataFrame()
+            if not people or orderer == "(add names in data/people.txt)":
+                st.error("Please add/select an orderer in data/people.txt.")
+                return pd.DataFrame()
+            return chosen[["item","product_number","qty"]].copy()
+
+        def _email_recipients(orderer_name: str, cc_orderer_flag: bool) -> list[str]:
+            recips = read_emails()
+            to = set(recips["email"].tolist())
+            if cc_orderer_flag and orderer_name and not recips.empty:
+                match = recips[recips["name"].str.strip().str.lower() == orderer_name.strip().lower()]
+                to.update(match["email"].tolist())
+            return sorted([e for e in to if e])
+
+        def _log_and_email(order_df: pd.DataFrame, do_decrement: bool):
+            # Save screen copy
+            write_last(order_df, orderer)
+            # Log rows
+            when_str = append_log(order_df, orderer)
+
+            # Optionally decrement current_qty
+            if do_decrement:
+                cat2 = catalog.copy()
+                for _, r in order_df.iterrows():
+                    mask = (cat2["item"] == r["item"]) & (cat2["product_number"].astype(str) == str(r["product_number"]))
+                    cat2.loc[mask, "current_qty"] = (
+                        pd.to_numeric(cat2.loc[mask, "current_qty"], errors="coerce").fillna(0).astype(int) - int(r["qty"])
+                    ).clip(lower=0)
+                write_catalog(cat2)
+
+            # Email everyone in emails.csv (and cc orderer if chosen)
+            if smtp_ok():
+                recipients = _email_recipients(orderer, cc_orderer)
+                if recipients:
+                    lines = [f"- {r['item']} (#{r['product_number']}): {r['qty']}" for _, r in order_df.iterrows()]
+                    body = "\n".join([
+                        f"New supply order logged at {when_str}",
+                        f"Ordered by: {orderer or 'Unknown'}",
+                        "",
+                        "Items:",
+                        *lines
+                    ])
+                    try:
+                        send_email("Supply Order Logged", body, recipients)
+                        st.success(f"Emailed {len(recipients)} recipient(s).")
+                    except Exception as e:
+                        st.error(f"Email failed: {e}")
+                else:
+                    st.info("No valid recipients found in data/emails.csv.")
+            else:
+                st.info("Email disabled — configure .streamlit/secrets.toml [smtp].")
+
+            st.rerun()
+
+        with b1:
+            if st.button("🧾 Generate & Log Order", use_container_width=True, key="btn_log"):
+                selected = _selected_from_editor(edited)
+                if not selected.empty:
+                    _log_and_email(selected, do_decrement=False)
+
+        with b2:
+            if st.button("🧾 Generate, Log, & Decrement", use_container_width=True, key="btn_log_dec"):
+                selected = _selected_from_editor(edited)
+                if not selected.empty:
+                    _log_and_email(selected, do_decrement=True)
+
+# ---------- Adjust Inventory ----------
+with tabs[1]:
+    if catalog.empty:
+        st.info("No catalog found.")
+    else:
+        st.write("Adjust `current_qty` or `sort_order`, then save.")
+        editable = catalog.copy()
+        edited = st.data_editor(
+            editable,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "item": st.column_config.TextColumn("Item", disabled=True),
+                "product_number": st.column_config.TextColumn("Product #", disabled=True),
+                "current_qty": st.column_config.NumberColumn("Current Qty", min_value=0, step=1),
+                "sort_order": st.column_config.NumberColumn("Sort order", min_value=0, step=1),
+            },
+            key="inventory_editor",
+        )
+        if st.button("💾 Save inventory changes", key="inventory_save"):
+            write_catalog(edited)
+            st.success("Inventory saved.")
+
+# ---------- Catalog (read-only + quick add/remove) ----------
+with tabs[2]:
+    st.caption("Catalog source: data/catalog.csv")
+    if catalog.empty:
+        st.info("No catalog found.")
+    else:
+        st.dataframe(catalog, use_container_width=True, hide_index=True)
+
+    st.markdown("**Quick add**")
+    c1, c2, c3 = st.columns([2, 1, 1])
+    with c1:
+        new_item = st.text_input("Item name", key="cat_add_item")
+    with c2:
+        new_pn = st.text_input("Product #", key="cat_add_pn")
+    with c3:
+        new_qty = st.number_input("Current qty", min_value=0, value=0, step=1, key="cat_add_qty")
+
+    if st.button("➕ Add to catalog", key="cat_add_btn"):
+        if new_item.strip() and new_pn.strip():
+            next_order = (catalog["sort_order"].max() + 1) if not catalog.empty else 0
+            new_row = pd.DataFrame([{
+                "item": new_item.strip(),
+                "product_number": str(new_pn).strip(),
+                "current_qty": int(new_qty),
+                "sort_order": int(next_order),
+            }])
+            updated = pd.concat([catalog, new_row], ignore_index=True).drop_duplicates(
+                subset=["item","product_number"], keep="last"
+            )
+            write_catalog(updated)
+            st.success(f"Added: {new_item.strip()}")
+            st.rerun()
+        else:
+            st.error("Item and Product # are required.")
+
+    st.markdown("---")
+    if not catalog.empty:
+        to_remove = st.multiselect("Remove item(s)", catalog["item"].tolist(), key="cat_remove_sel")
+        if st.button("🗑️ Remove selected", key="cat_remove_btn"):
+            updated = catalog[~catalog["item"].isin(to_remove)]
+            write_catalog(updated)
+            st.success(f"Removed {len(to_remove)} item(s).")
+            st.rerun()
+
+# ---------- Order Logs ----------
+with tabs[3]:
+    logs = read_log()
+    if logs.empty:
+        st.info("No orders logged yet.")
+    else:
+        st.dataframe(logs.sort_values("ordered_at", ascending=False), use_container_width=True, hide_index=True)
+        st.download_button(
+            "⬇️ Download full log (CSV)",
+            data=logs.to_csv(index=False).encode("utf-8"),
+            file_name="order_log.csv",
+            mime="text/csv",
+            key="log_dl",
+        )
+
+        # Quick clearing tools
+        st.markdown("### Clear 'Last ordered' history")
+        pairs = logs[["item","product_number"]].drop_duplicates().sort_values(["item","product_number"])
+        pairs["label"] = pairs.apply(lambda r: f"{r['item']} — {r['product_number']}", axis=1)
+        to_clear = st.multiselect("Select items to clear from history", pairs["label"].tolist(), key="log_clear_sel")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("🧹 Clear selected", key="log_clear_selected"):
+                if to_clear:
+                    keep = ~logs.apply(lambda r: f"{r['item']} — {r['product_number']}" in set(to_clear), axis=1)
+                    logs[keep].to_csv(LOG_PATH, index=False)
+                    st.success(f"Cleared {len(logs) - keep.sum()} rows.")
+                    st.rerun()
+                else:
+                    st.info("No items selected.")
+        with c2:
+            if st.button("🗑️ Clear ALL history", key="log_clear_all"):
+                ensure_headers(LOG_PATH, ORDER_LOG_COLUMNS)
+                st.success("Cleared entire order history.")
+                st.rerun()
