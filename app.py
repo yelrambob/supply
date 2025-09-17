@@ -6,116 +6,121 @@ import smtplib, ssl
 from email.message import EmailMessage
 
 # ---------- Paths ----------
-CATALOG_PATH = Path("data/catalog.csv")
-LOG_PATH = Path("data/order_log.csv")
-PEOPLE_PATH = Path("data/people.txt")
-EMAILS_PATH = Path("data/emails.csv")
+DATA_DIR = Path("data")
+CATALOG_PATH = DATA_DIR / "catalog.csv"
+PEOPLE_PATH = DATA_DIR / "people.txt"
+LOG_PATH = DATA_DIR / "order_log.csv"
 
-# ---------- Load data ----------
+# ---------- Load ----------
+@st.cache_data
 def load_catalog():
     df = pd.read_csv(CATALOG_PATH)
-    df = df.dropna(subset=["product_number"])  # Prevent duplicate keys due to blanks
-    return df
+    df = df.dropna(subset=["item", "product_number"])
+    df["item"] = df["item"].astype(str)
+    df["product_number"] = df["product_number"].astype(str)
+    return df.reset_index(drop=True)
 
+@st.cache_data
 def load_people():
     if PEOPLE_PATH.exists():
-        return [name.strip() for name in open(PEOPLE_PATH).readlines() if name.strip()]
+        return [p.strip() for p in PEOPLE_PATH.read_text().splitlines() if p.strip()]
     return ["Unknown"]
-
-def load_emails():
-    if EMAILS_PATH.exists():
-        return pd.read_csv(EMAILS_PATH)
-    return pd.DataFrame(columns=["email"])
 
 def load_log():
     if LOG_PATH.exists():
         return pd.read_csv(LOG_PATH)
     return pd.DataFrame(columns=["timestamp", "orderer", "item", "product_number", "qty"])
 
-# ---------- Email logic ----------
-def send_email(subject, body, to_emails):
-    config = st.secrets["email"]
+def save_log(new_entries):
+    log = load_log()
+    combined = pd.concat([log, new_entries], ignore_index=True)
+    combined.to_csv(LOG_PATH, index=False)
+
+# ---------- Email ----------
+def send_email(order_df, orderer, timestamp):
+    config = st.secrets["smtp"]
     msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = config["email"]
-    msg["To"] = ", ".join(to_emails)
+    msg["Subject"] = f"📦 Supply Order from {orderer} at {timestamp}"
+    msg["From"] = config["from"]
+    msg["To"] = config["to"]
+
+    body = f"Order placed by: {orderer} on {timestamp}\n\n"
+    body += order_df.to_string(index=False)
     msg.set_content(body)
 
     context = ssl.create_default_context()
-    with smtplib.SMTP_SSL(config["smtp_server"], config["smtp_port"], context=context) as server:
-        server.login(config["email"], config["password"])
+    with smtplib.SMTP(config["host"], config["port"]) as server:
+        if not config.get("use_ssl", False):
+            server.starttls(context=context)
+        server.login(config["user"], config["password"])
         server.send_message(msg)
 
-# ---------- UI ----------
-st.set_page_config("📦 Supply Ordering", layout="wide")
+# ---------- App ----------
+st.set_page_config("📦 Supply Order", layout="wide")
 st.title("📦 Supply Ordering")
 
+# Load
 catalog = load_catalog()
 people = load_people()
-emails = load_emails()
-log = load_log()
+log_df = load_log()
 
-orderer = st.selectbox("Who is placing this order?", people)
-search = st.text_input("Search for a supply item:")
+# Persistent qty inputs
+if "quantities" not in st.session_state:
+    st.session_state.quantities = {}
 
+# Orderer
+orderer = st.selectbox("Who is placing the order?", people)
+
+# Search
+search = st.text_input("Search items:")
+filtered = catalog.copy()
 if search:
-    filtered_catalog = catalog[catalog["item"].str.contains(search, case=False, na=False)]
-else:
-    filtered_catalog = catalog.copy()
+    filtered = catalog[catalog["item"].str.contains(search, case=False, na=False)]
 
-st.write("### Select quantities for supplies")
-qty_input = {}
-for i, row in filtered_catalog.iterrows():
-    col1, col2 = st.columns([3, 1])
+# Item list with quantity inputs
+st.subheader("🛒 Select Quantities")
+qty_input = []
+for i, row in filtered.iterrows():
+    item_key = f"{row['product_number']}_{i}"
+    col1, col2 = st.columns([4, 1])
     with col1:
-        st.text(f"{row['item']} ({row['product_number']})")
+        st.markdown(f"**{row['item']}** — `{row['product_number']}`")
     with col2:
-        qty = st.number_input(
-            f"Qty for {row['item']}",
-            min_value=0,
-            step=1,
-            key=f"{row['product_number']}_{i}"  # Ensures uniqueness
-        )
+        qty = st.number_input("Qty", min_value=0, step=1, value=st.session_state.quantities.get(item_key, 0), key=item_key)
         if qty > 0:
-            qty_input[row['product_number']] = {
-                "item": row['item'],
-                "product_number": row['product_number'],
-                "qty": qty,
-            }
-
-if qty_input:
-    st.write("### 🧾 Current Order Summary")
-    order_df = pd.DataFrame(qty_input.values())
-    st.dataframe(order_df, use_container_width=True)
-
-    if st.button("📤 Log and Email Order"):
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_entries = []
-        for entry in qty_input.values():
-            log_entries.append({
-                "timestamp": now,
-                "orderer": orderer,
-                "item": entry["item"],
-                "product_number": entry["product_number"],
-                "qty": entry["qty"]
+            st.session_state.quantities[item_key] = qty
+            qty_input.append({
+                "item": row["item"],
+                "product_number": row["product_number"],
+                "qty": qty
             })
-        log_df = pd.DataFrame(log_entries)
-        new_log = pd.concat([log, log_df], ignore_index=True)
-        new_log.to_csv(LOG_PATH, index=False)
 
-        # Send Email
-        recipient_emails = emails["email"].dropna().tolist()
-        email_body = f"Order placed by: {orderer} on {now}\n\n"
-        email_body += order_df.to_string(index=False)
-        send_email("📦 New Supply Order Logged", email_body, recipient_emails)
+# Submit button
+if st.button("📤 Log and Email Order"):
+    if not qty_input:
+        st.warning("Please enter quantities before logging.")
+    else:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        order_df = pd.DataFrame(qty_input)
+        order_df["timestamp"] = timestamp
+        order_df["orderer"] = orderer
+        save_log(order_df[["timestamp", "orderer", "item", "product_number", "qty"]])
+        send_email(order_df[["item", "product_number", "qty"]], orderer, timestamp)
 
-        st.success("Order logged and email sent.")
+        # Show success + shopping list
+        st.success("Order logged and emailed.")
+        st.subheader("🧾 Copy/Paste Shopping List")
+        lines = [f"{r['item']} — {r['product_number']} — Qty {r['qty']}" for r in qty_input]
+        st.text_area("Shopping List", value="\n".join(lines), height=200)
+        st.download_button(
+            "⬇️ Download CSV",
+            data=pd.DataFrame(qty_input)[["item", "product_number", "qty"]].to_csv(index=False).encode("utf-8"),
+            file_name=f"order_{timestamp.replace(':', '-')}.csv",
+            mime="text/csv"
+        )
 
-# ---------- View Log ----------
-st.write("### 📜 Order Log (Most Recent First)")
-if LOG_PATH.exists():
-    log = pd.read_csv(LOG_PATH)
-    log = log.sort_values(by="timestamp", ascending=False)
-    st.dataframe(log, use_container_width=True)
-else:
-    st.info("No orders have been logged yet.")
+# Order log
+if not log_df.empty:
+    st.divider()
+    st.subheader("📜 Past Orders")
+    st.dataframe(log_df.sort_values("timestamp", ascending=False), use_container_width=True)
