@@ -223,7 +223,7 @@ with tabs[0]:
             st.info("No previous order.")
         else:
             lines = [f"{r['item']} — {r['product_number']} — Qty {r['qty']}" for _, r in last_order_df.iterrows()]
-            meta = f"Generated at {last_order_df['generated_at'].iloc[0]} by {last_order_df['orderer"].iloc[0]}"
+            meta = f"Generated at {last_order_df['generated_at'].iloc[0]} by {last_order_df["orderer"].iloc[0]}"
             st.text_area("Copy/paste", value="\n".join(lines), height=160, key="order_copy_area")
             st.caption(meta)
             st.download_button(
