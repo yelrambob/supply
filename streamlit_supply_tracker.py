@@ -20,9 +20,33 @@ LAST_ORDER_PATH = DATA_DIR / "last_order.csv"
 
 # Catalog now includes per-box quantity (multiplier)
 CATALOG_COLUMNS = ["item", "product_number", "current_qty", "per_box_qty", "sort_order"]
-
 LAST_ORDER_COLUMNS = ["item", "product_number", "qty", "generated_at", "orderer"]
 ORDER_LOG_COLUMNS = ["item", "product_number", "qty", "ordered_at", "orderer"]
+
+# --- Cold-start defaults (lives in repo; copied into data/ on boot) ---
+DEFAULTS_DIR = Path("defaults")
+DEFAULTS_DIR.mkdir(exist_ok=True)  # ok if you don't commit files yet
+DEFAULT_CATALOG = DEFAULTS_DIR / "catalog.default.csv"
+DEFAULT_PEOPLE  = DEFAULTS_DIR / "people.default.txt"
+
+def _file_missing_or_empty(p: Path) -> bool:
+    try:
+        return (not p.exists()) or p.stat().st_size == 0
+    except Exception:
+        return True
+
+def seed_from_defaults():
+    """If data/ files are missing/empty, copy from defaults/."""
+    try:
+        if _file_missing_or_empty(CATALOG_PATH) and DEFAULT_CATALOG.exists():
+            copy2(DEFAULT_CATALOG, CATALOG_PATH)
+        if _file_missing_or_empty(PEOPLE_PATH) and DEFAULT_PEOPLE.exists():
+            copy2(DEFAULT_PEOPLE, PEOPLE_PATH)
+    except Exception as e:
+        st.warning(f"Seeding defaults failed: {e}")
+
+# Call seeding BEFORE reading any catalog/people
+seed_from_defaults()
 
 # ---------- Robust CSV helpers ----------
 def safe_read_csv(path: Path, **kwargs) -> pd.DataFrame:
@@ -49,26 +73,28 @@ safe_ensure_file_with_header(LOG_PATH, ORDER_LOG_COLUMNS)
 # ---------- Email helpers (Gmail/SMTP friendly) ----------
 def get_smtp_config():
     smtp = st.secrets.get("smtp", {})
-    port = int(smtp.get("port", 465))
-    # Respect explicit use_ssl if provided; otherwise infer from port
-    use_ssl_raw = smtp.get("use_ssl", None)
-    if use_ssl_raw is None:
-        use_ssl = (port == 465)
-    else:
-        use_ssl = str(use_ssl_raw).lower() in ("1", "true", "yes")
 
-    # If force_from_user, From must match the authenticated user
-    mail_from = smtp.get("from") or smtp.get("user") or ""
-    if smtp.get("force_from_user", False) and smtp.get("user"):
-        mail_from = smtp.get("user")
+    def _clean(s):
+        # trim whitespace/newlines; keep None as None
+        return None if s is None else str(s).strip()
+
+    host = _clean(smtp.get("host"))
+    port = int(str(smtp.get("port", 465)).strip())
+    use_ssl_raw = smtp.get("use_ssl", None)
+    use_ssl = (port == 465) if use_ssl_raw is None else str(use_ssl_raw).lower() in ("1", "true", "yes")
+    user = _clean(smtp.get("user"))
+    password = _clean(smtp.get("password"))
+    mail_from = _clean(smtp.get("from")) or user or ""
+    if smtp.get("force_from_user", False) and user:
+        mail_from = user
 
     return {
-        "host": smtp.get("host"),
+        "host": host,
         "port": port,
-        "user": smtp.get("user"),
-        "password": smtp.get("password"),
+        "user": user,
+        "password": password,
         "mail_from": mail_from,
-        "default_to": smtp.get("to", ""),
+        "default_to": _clean(smtp.get("to", "")),
         "use_ssl": use_ssl,
         "force_from_user": bool(smtp.get("force_from_user", False)),
     }
@@ -137,6 +163,36 @@ def send_email_receipt(order_df: pd.DataFrame, orderer: str, when_str: str, reci
         st.error(f"Email failed: {msg}")
     return ok
 
+def gmail_self_test():
+    cfg = get_smtp_config()
+    steps = []
+    try:
+        if cfg["use_ssl"]:
+            s = smtplib.SMTP_SSL(cfg["host"], cfg["port"], timeout=20)
+            steps.append("Connected via SSL")
+        else:
+            s = smtplib.SMTP(cfg["host"], cfg["port"], timeout=20)
+            steps.append("Connected (plain)")
+            s.ehlo()
+            s.starttls(context=ssl.create_default_context())
+            s.ehlo()
+            steps.append("STARTTLS OK")
+
+        s.login(cfg["user"], cfg["password"])
+        steps.append("LOGIN OK")
+        s.quit()
+        st.success("✅ Gmail self-test passed: " + " → ".join(steps))
+    except smtplib.SMTPAuthenticationError as e:
+        st.error(f"❌ LOGIN FAILED: {e.smtp_code} {e.smtp_error}")
+    except smtplib.SMTPSenderRefused as e:
+        st.error(f"❌ SENDER REFUSED: {e.smtp_code} {e.smtp_error}")
+    except smtplib.SMTPRecipientsRefused as e:
+        st.error(f"❌ RECIPIENT REFUSED: {e.recipients}")
+    except smtplib.SMTPServerDisconnected as e:
+        st.error(f"❌ SERVER DISCONNECTED: {e}")
+    except Exception as e:
+        st.error(f"❌ {type(e).__name__}: {e}")
+
 def send_test_email(recipients_str: str) -> None:
     cfg = get_smtp_config()
     recipients = [r.strip() for r in str(recipients_str or "").split(",") if r.strip()]
@@ -150,15 +206,13 @@ def send_test_email(recipients_str: str) -> None:
         st.success("✅ Test email sent.")
     else:
         st.error(f"❌ Test email failed: {msg}")
-    if st.button("Run Gmail self-test", key="smtp_selftest_btn"):
-        gmail_self_test()
 
 # ---------- Utilities ----------
 def clean_catalog(df: pd.DataFrame) -> pd.DataFrame:
     """
     Convert a 'wide' sheet (name col + nearby numeric col) into tidy rows:
     ['item','product_number','current_qty','per_box_qty','sort_order'].
-    We preserve original input order via sort_order (NOT forced A→Z).
+    Preserves original input order via sort_order.
     """
     tidy_rows = []
     cols = df.columns.tolist()
@@ -192,7 +246,7 @@ def clean_catalog(df: pd.DataFrame) -> pd.DataFrame:
     tidy["item"] = tidy["item"].str.replace(r"\s+", " ", regex=True).str.strip()
     tidy = tidy[tidy["item"].str.len() > 0]
     tidy["current_qty"] = 0
-    tidy["per_box_qty"] = 1  # default multiplier; you can edit later in the app or CSV
+    tidy["per_box_qty"] = 1  # default multiplier; editable later
     tidy["sort_order"] = range(len(tidy))  # preserve original order
     return tidy[CATALOG_COLUMNS]
 
@@ -209,12 +263,11 @@ def save_people(people):
 def init_catalog(upload_bytes):
     if upload_bytes is not None:
         raw = pd.read_csv(io.BytesIO(upload_bytes))
-        # If the uploaded CSV already looks tidy and has the expected columns, respect them
+        # If the uploaded CSV already looks tidy and has expected columns, respect them
         lower_cols = {c.lower().strip(): c for c in raw.columns}
         expected_basic = {"item", "product_number"}
         has_expected = expected_basic.issubset(set(lower_cols.keys()))
         if has_expected:
-            # Normalize column names we care about; add missing ones
             df = raw.rename(columns={lower_cols["item"]: "item", lower_cols["product_number"]: "product_number"})
             if "current_qty" not in df.columns:
                 df["current_qty"] = 0
@@ -239,6 +292,12 @@ def init_catalog(upload_bytes):
             except Exception as e:
                 st.warning(f"Backup failed (continuing): {e}")
         tidy.to_csv(CATALOG_PATH, index=False)
+        # ALSO refresh the default copy so cold-starts have it
+        try:
+            DEFAULTS_DIR.mkdir(exist_ok=True)
+            tidy.to_csv(DEFAULT_CATALOG, index=False)
+        except Exception as e:
+            st.warning(f"Couldn't update default catalog copy: {e}")
         st.success(f"Catalog created with {len(tidy)} items.")
     else:
         if not CATALOG_PATH.exists():
@@ -391,6 +450,32 @@ if people:
         st.sidebar.success(f"Removed '{remove_person}'")
         st.rerun()
 
+# --- Cold-start defaults controls (save current -> defaults) ---
+st.sidebar.divider()
+st.sidebar.subheader("Cold-start defaults")
+colA, colB = st.sidebar.columns(2)
+with colA:
+    if st.sidebar.button("Save catalog → defaults", key="save_catalog_default_btn"):
+        try:
+            cat_now = safe_read_csv(CATALOG_PATH)
+            if cat_now.empty:
+                st.sidebar.error("Current catalog is empty; nothing to save.")
+            else:
+                DEFAULTS_DIR.mkdir(exist_ok=True)
+                cat_now.to_csv(DEFAULT_CATALOG, index=False)
+                st.sidebar.success(f"Saved to {DEFAULT_CATALOG}")
+        except Exception as e:
+            st.sidebar.error(f"Save failed: {e}")
+with colB:
+    if st.sidebar.button("Save people → defaults", key="save_people_default_btn"):
+        try:
+            DEFAULTS_DIR.mkdir(exist_ok=True)
+            people_now = load_people()
+            Path(DEFAULT_PEOPLE).write_text("\n".join(people_now), encoding="utf-8")
+            st.sidebar.success(f"Saved to {DEFAULT_PEOPLE}")
+        except Exception as e:
+            st.sidebar.error(f"Save failed: {e}")
+
 # ---------- Main ----------
 st.title("📦 Supply Ordering & Inventory Tracker")
 
@@ -452,42 +537,26 @@ with tab_catalog:
                 st.rerun()
             else:
                 st.error("Please provide both Item and Product #.")
-    # --- in the Catalog tab, replace the old "remove selected" block with this ---
-st.markdown("---")
-if not cat.empty:
-    import pandas as pd
-
-    # Build human-friendly labels and guard against NA values
-    cat_labels = cat.copy()
-    cat_labels = cat_labels.dropna(subset=["item"])  # remove rows with missing item names
-    def _label_row(r):
-        item = str(r.get("item", "")).strip()
-        pn = r.get("product_number", "")
-        # make product_number a clean string (avoid <NA>)
-        pn_str = "" if pd.isna(pn) else str(pn)
-        return f"{item} — {pn_str}"
-
-    cat_labels["label"] = cat_labels.apply(_label_row, axis=1)
-    options = [l for l in cat_labels["label"].tolist() if l and not l.startswith(" — ")]
-
-    to_remove = st.multiselect(
-        "Select item(s) to remove",
-        options,
-        key="catalog_remove_sel",
-    )
-
-    if st.button("🗑️ Remove selected", key="catalog_remove_selected_btn"):
-        sel = set(to_remove)
-
-        # Build the same label on the original DataFrame, then filter
-        labels_on_cat = cat.apply(_label_row, axis=1)
-        keep_mask = ~labels_on_cat.isin(sel)
-        updated = cat[keep_mask].copy()
-
-        write_catalog(updated)
-        st.success(f"Removed {len(cat) - len(updated)} item(s).")
-        st.rerun()
-
+    st.markdown("---")
+    if not cat.empty:
+        # Safer remove block: avoid pd.NA in options, use label "Item — Product#"
+        cat_labels = cat.copy().dropna(subset=["item"])
+        def _label_row(r):
+            item = str(r.get("item", "")).strip()
+            pn = r.get("product_number", "")
+            pn_str = "" if pd.isna(pn) else str(pn)
+            return f"{item} — {pn_str}"
+        cat_labels["label"] = cat_labels.apply(_label_row, axis=1)
+        options = [l for l in cat_labels["label"].tolist() if l and not l.startswith(" — ")]
+        to_remove = st.multiselect("Select item(s) to remove", options, key="catalog_remove_sel")
+        if st.button("🗑️ Remove selected", key="catalog_remove_selected_btn"):
+            sel = set(to_remove)
+            labels_on_cat = cat.apply(_label_row, axis=1)
+            keep_mask = ~labels_on_cat.isin(sel)
+            updated = cat[keep_mask].copy()
+            write_catalog(updated)
+            st.success(f"Removed {len(cat) - len(updated)} item(s).")
+            st.rerun()
 
 # --- Inventory tab ---
 with tab_inventory:
@@ -521,20 +590,29 @@ with tab_inventory:
 # --- Email config + tester ---
 with st.expander("Email config status / Test"):
     cfg = get_smtp_config()
+    masked_pw = ("*" * len(cfg["password"])) if cfg["password"] else ""
     st.write("SMTP configured:", bool(cfg["host"]))
     st.write({
         "host": cfg["host"],
         "port": cfg["port"],
         "use_ssl": cfg["use_ssl"],
         "from": cfg["mail_from"],
-        "force_from_user": cfg["force_from_user"],
+        "user": cfg["user"],
+        "password_len": len(cfg["password"]) if cfg["password"] else 0,
         "has_user": bool(cfg["user"]),
         "has_password": bool(cfg["password"]),
         "default_to": cfg["default_to"],
+        "force_from_user": cfg["force_from_user"],
     })
+    st.caption(f"password (masked): {masked_pw}")
     test_to = st.text_input("Send test email to (comma-separated)", value=cfg["default_to"], key="smtp_test_to")
-    if st.button("Send test email", key="smtp_test_btn"):
-        send_test_email(test_to)
+    col_t1, col_t2 = st.columns(2)
+    with col_t1:
+        if st.button("Run Gmail self-test", key="smtp_selftest_btn"):
+            gmail_self_test()
+    with col_t2:
+        if st.button("Send test email", key="smtp_test_btn"):
+            send_test_email(test_to)
 
 # --- Order tab ---
 with tab_order:
@@ -677,7 +755,6 @@ with tab_order:
                 ok = send_email_receipt(order_df, orderer, when_str, email_to)
                 if ok:
                     st.success("Email receipt sent.")
-                # even if it fails, continue to rerun to refresh UI
 
             # Refresh so "Last ordered" updates and top copy block refreshes
             st.rerun()
@@ -764,32 +841,3 @@ with tab_logs:
                 st.rerun()
     else:
         st.info("No orders logged yet.")
-def gmail_self_test():
-    cfg = get_smtp_config()
-    steps = []
-    try:
-        if cfg["use_ssl"]:
-            s = smtplib.SMTP_SSL(cfg["host"], cfg["port"], timeout=20)
-            steps.append("Connected via SSL")
-        else:
-            s = smtplib.SMTP(cfg["host"], cfg["port"], timeout=20)
-            steps.append("Connected (plain)")
-            s.ehlo()
-            s.starttls(context=ssl.create_default_context())
-            s.ehlo()
-            steps.append("STARTTLS OK")
-
-        s.login(cfg["user"], cfg["password"])
-        steps.append("LOGIN OK")
-        s.quit()
-        st.success("✅ Gmail self-test passed: " + " → ".join(steps))
-    except smtplib.SMTPAuthenticationError as e:
-        st.error(f"❌ LOGIN FAILED: {e.smtp_code} {e.smtp_error}")
-    except smtplib.SMTPSenderRefused as e:
-        st.error(f"❌ SENDER REFUSED: {e.smtp_code} {e.smtp_error}")
-    except smtplib.SMTPRecipientsRefused as e:
-        st.error(f"❌ RECIPIENT REFUSED: {e.recipients}")
-    except smtplib.SMTPServerDisconnected as e:
-        st.error(f"❌ SERVER DISCONNECTED: {e}")
-    except Exception as e:
-        st.error(f"❌ {type(e).__name__}: {e}")
