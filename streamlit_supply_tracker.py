@@ -98,6 +98,9 @@ def init_catalog(upload_bytes):
         tidy = clean_catalog(raw)
         if tidy.empty:
             st.error("Uploaded file couldn't be parsed into a catalog. Please check columns.")
+        if CATALOG_PATH.exists():
+            backup = CATALOG_PATH.with_name(f"catalog_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
+            copy2(CATALOG_PATH, backup)
         else:
             tidy.to_csv(CATALOG_PATH, index=False)
             st.success(f"Catalog created with {len(tidy)} items.")
