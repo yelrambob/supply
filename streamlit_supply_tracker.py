@@ -146,7 +146,7 @@ def write_catalog(df: pd.DataFrame):
 def append_log(order_df: pd.DataFrame, orderer: str):
     """
     Append new rows to order_log.csv and drop exact duplicates.
-    Duplicate definition: same (item, product_number, qty, ordered_at, orderer).
+    Duplicate = same (item, product_number, qty, ordered_at, orderer).
     """
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     df = order_df.copy()
@@ -184,14 +184,11 @@ def load_last_order() -> pd.DataFrame:
     return df[LAST_ORDER_COLUMNS]
 
 def save_last_order(df: pd.DataFrame, orderer: str):
-    try:
-        out = df.copy()
-        out["generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        out["orderer"] = orderer
-        out = out[LAST_ORDER_COLUMNS]
-        out.to_csv(LAST_ORDER_PATH, index=False)
-    except Exception as e:
-        st.warning(f"Couldn't persist last order: {e}")
+    out = df.copy()
+    out["generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    out["orderer"] = orderer
+    out = out[LAST_ORDER_COLUMNS]
+    out.to_csv(LAST_ORDER_PATH, index=False)
 
 def last_order_info_map() -> pd.DataFrame:
     """
@@ -320,12 +317,30 @@ with tab_order:
     if cat.empty:
         st.info("No catalog yet. Initialize it from the sidebar.")
     else:
-        # Last generated order (includes date & user)
+        # ---------- TOP: copy/paste list from last generated ----------
+        top_box = st.container()
         last_order_df = load_last_order()
         if not last_order_df.empty:
-            st.markdown("**Last generated order (persists across sessions):**")
-            st.dataframe(last_order_df, use_container_width=True, hide_index=True)
+            lines = [f"{r['item']} — {r['product_number']} — Qty {r['qty']}" for _, r in last_order_df.iterrows()]
+            gen_at = last_order_df["generated_at"].iloc[0] if "generated_at" in last_order_df.columns else ""
+            gen_by = last_order_df["orderer"].iloc[0] if "orderer" in last_order_df.columns else ""
+            with top_box:
+                st.markdown("### Order to paste into your other system")
+                st.text_area("Copy/paste", value="\n".join(lines), height=160)
+                if gen_at or gen_by:
+                    st.caption(f"Generated at {gen_at} by {gen_by}")
+                st.download_button(
+                    "⬇️ Download CSV",
+                    data=last_order_df[["item","product_number","qty"]].to_csv(index=False).encode("utf-8"),
+                    file_name=f"order_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                    mime="text/csv",
+                )
+        else:
+            with top_box:
+                st.markdown("### Order to paste into your other system")
+                st.info("No order generated yet. Enter quantities below and press a button to generate & log.")
 
+        # ---------- Controls / table ----------
         orderer = st.selectbox(
             "Who is placing the order?",
             options=(people if people else ["(add names in sidebar)"]),
@@ -343,7 +358,7 @@ with tab_order:
         sort_choice = st.selectbox(
             "Sort items by",
             options=["Original order", "Last ordered (newest first)", "Last ordered (oldest first)", "Product # asc", "Name A→Z"],
-            index=1,  # <-- default newest first
+            index=1,  # default newest first
         )
         if sort_choice == "Original order":
             table = table.sort_values(["sort_order", "item"], kind="stable")
@@ -388,51 +403,54 @@ with tab_order:
             },
         )
 
-        # --- TWO BUTTONS ---
-        dec_inventory = st.checkbox("Decrement inventory by ordered qty")
+        # Helpers
+        def _make_order_df_from(edited_df: pd.DataFrame) -> pd.DataFrame:
+            chosen = edited_df[edited_df["qty"] > 0].copy()
+            if chosen.empty:
+                st.error("Please set Qty > 0 for at least one item.")
+                return pd.DataFrame()
+            if not people or orderer == "(add names in sidebar)":
+                st.error("Please add/select an orderer in the sidebar first.")
+                return pd.DataFrame()
+            return chosen[["item", "product_number", "qty"]].copy()
 
+        def _save_and_log(order_df: pd.DataFrame, do_decrement: bool):
+            # Persist for next session
+            save_last_order(order_df, orderer=orderer)
+            # Append to log
+            append_log(order_df, orderer)
+            # Optional: decrement inventory
+            if do_decrement:
+                cat2 = cat.copy()
+                for _, r in order_df.iterrows():
+                    mask = (cat2["item"] == r["item"]) & (cat2["product_number"].astype(str) == str(r["product_number"]))
+                    cat2.loc[mask, "current_qty"] = (
+                        pd.to_numeric(cat2.loc[mask, "current_qty"], errors="coerce").fillna(0).astype(int) - int(r["qty"])
+                    ).clip(lower=0)
+                write_catalog(cat2)
+
+            # Rebuild copy list into session then refresh so "Last ordered" updates
+            lines = [f"{r['item']} — {r['product_number']} — Qty {r['qty']}" for _, r in order_df.iterrows()]
+            st.session_state["copy_text"] = "\n".join(lines)
+            st.session_state["copy_meta"] = f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} by {orderer}"
+            st.rerun()
+
+        # --- TWO BUTTONS (both generate & log, second also decrements) ---
         c1, c2 = st.columns(2)
         with c1:
-            if st.button("🧾 Generate Order"):
-                chosen = edited[edited["qty"] > 0].copy()
-                if chosen.empty:
-                    st.error("Please set Qty > 0 for at least one item.")
-                else:
-                    order_df = chosen[["item", "product_number", "qty"]].copy()
-                    # Persist for next session (who & when generated)
-                    save_last_order(order_df, orderer=(orderer if people and orderer != "(add names in sidebar)" else "(unknown)"))
-                    st.success("Order generated.")
-                    st.dataframe(order_df, use_container_width=True, hide_index=True)
-                    csv_bytes = order_df.to_csv(index=False).encode("utf-8")
-                    st.download_button("⬇️ Download CSV", data=csv_bytes,
-                                       file_name=f"order_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                                       mime="text/csv")
+            if st.button("🧾 Generate & Log Order"):
+                odf = _make_order_df_from(edited)
+                if not odf.empty:
+                    _save_and_log(odf, do_decrement=False)
         with c2:
-            if st.button("📝 Log Order"):
-                chosen = edited[edited["qty"] > 0].copy()
-                if chosen.empty:
-                    st.error("Please set Qty > 0 for at least one item.")
-                elif not people or orderer == "(add names in sidebar)":
-                    st.error("Please add/select an orderer in the sidebar first.")
-                else:
-                    order_df = chosen[["item", "product_number", "qty"]].copy()
-                    now = append_log(order_df, orderer)
-                    st.success(f"Order logged at {now}.")
-                    # Optional: decrement inventory
-                    if dec_inventory:
-                        cat2 = cat.copy()
-                        # match on BOTH item and product_number
-                        for _, r in order_df.iterrows():
-                            mask = (cat2["item"] == r["item"]) & (cat2["product_number"].astype(str) == str(r["product_number"]))
-                            cat2.loc[mask, "current_qty"] = (pd.to_numeric(cat2.loc[mask, "current_qty"], errors="coerce")
-                                                             .fillna(0).astype(int) - int(r["qty"])).clip(lower=0)
-                        write_catalog(cat2)
-                        st.info("Inventory updated.")
+            if st.button("🧾 Generate, Log, & Decrement"):
+                odf = _make_order_df_from(edited)
+                if not odf.empty:
+                    _save_and_log(odf, do_decrement=True)
 
         # Tools in Order tab — CLEAR last-ordered history here
         with st.expander("Tools"):
-            st.caption("Clear controls: 'Last ordered' / 'Last qty' come from order history (not the screen list).")
-            # build choices from current catalog view
+            st.caption("Clear controls: 'Last ordered' / 'Last qty' come from order history.")
             pairs = table[["item", "product_number"]].drop_duplicates().sort_values(["item", "product_number"])
             if pairs.empty:
                 st.info("No items to clear.")
@@ -460,7 +478,7 @@ with tab_order:
                 with colz:
                     if st.button("🧼 Clear last generated order (screen list only)"):
                         pd.DataFrame(columns=LAST_ORDER_COLUMNS).to_csv(LAST_ORDER_PATH, index=False)
-                        st.success("Cleared last generated order list (does not affect history).")
+                        st.success("Cleared last generated order list.")
                         st.rerun()
 
 # --- Logs tab ---
