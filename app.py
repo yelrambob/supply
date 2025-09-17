@@ -22,7 +22,7 @@ EMAILS_PATH  = DATA_DIR / "emails.csv"
 ORDER_LOG_COLUMNS = ["item", "product_number", "qty", "ordered_at", "orderer"]
 LAST_ORDER_COLUMNS = ["item", "product_number", "qty", "generated_at", "orderer"]
 
-# ---------------- Helpers: files ----------------
+# ---------------- File helpers ----------------
 def safe_read_csv(path: Path, **kwargs) -> pd.DataFrame:
     try:
         return pd.read_csv(path, **kwargs)
@@ -54,13 +54,23 @@ def send_email(subject: str, body: str, to_emails: list[str]):
     msg = EmailMessage()
     prefix = s.get("subject_prefix", "")
     msg["Subject"] = f"{prefix}{subject}" if prefix else subject
-    msg["From"] = s["from"]
+
+    # Use a valid email for From; fall back to username if needed
+    from_header = s.get("from") or s.get("username")
+    if "@" not in str(from_header):
+        from_header = s.get("username")
+    msg["From"] = from_header
+
     if s.get("reply_to"):
         msg["Reply-To"] = s["reply_to"]
     msg["To"] = ", ".join(to_emails)
     msg.set_content(body)
+
+    # Strip spaces from Gmail app password (defensive)
+    pwd = (s.get("password") or "").replace(" ", "")
+
     with smtplib.SMTP_SSL(s["server"], int(s["port"]), context=ctx) as server:
-        server.login(s["username"], s["password"])
+        server.login(s["username"], pwd)
         server.send_message(msg)
 
 # ---------------- Load core data ----------------
@@ -93,6 +103,7 @@ def read_catalog() -> pd.DataFrame:
     df = safe_read_csv(CATALOG_PATH)
     if df.empty:
         return pd.DataFrame(columns=["item", "product_number", "current_qty", "sort_order"])
+    # normalize
     for c in ["item", "product_number", "current_qty", "sort_order"]:
         if c not in df.columns:
             df[c] = pd.NA
@@ -184,7 +195,7 @@ def last_info_map() -> pd.DataFrame:
     tail["product_number"] = tail["product_number"].astype(str)
     return tail[["item","product_number","last_ordered_at","last_qty","last_orderer"]]
 
-# ---------------- Persisted qty map ----------------
+# ---------------- Persisted qty (in-session) ----------------
 def qkey(item: str, pn: str) -> str:
     return f"{item}||{str(pn)}"
 
@@ -202,17 +213,17 @@ last_order_df = read_last()
 
 st.caption(f"Loaded {len(catalog)} catalog rows • {len(logs)} log rows • Email configured: {'✅' if smtp_ok() else '❌'}")
 
-tabs = st.tabs(["Create Order", "Adjust Inventory", "Catalog", "Order Logs"])
+tabs = st.tabs(["Create Order", "Adjust Inventory", "Catalog", "Order Logs", "Tools"])
 
 # ---------- Create Order ----------
 with tabs[0]:
-    # Expander for last generated
+    # Last generated (collapsible)
     with st.expander("📋 Last generated order (copy/download)", expanded=False):
         if last_order_df.empty:
             st.info("No previous order.")
         else:
             lines = [f"{r['item']} — {r['product_number']} — Qty {r['qty']}" for _, r in last_order_df.iterrows()]
-            meta = f"Generated at {last_order_df['generated_at'].iloc[0]} by {last_order_df['orderer'].iloc[0]}"
+            meta = f"Generated at {last_order_df['generated_at'].iloc[0]} by {last_order_df['orderer"].iloc[0]}"
             st.text_area("Copy/paste", value="\n".join(lines), height=160, key="order_copy_area")
             st.caption(meta)
             st.download_button(
@@ -243,7 +254,7 @@ with tabs[0]:
                 st.session_state["qty_map"] = {}
                 st.success("Cleared all quantities.")
 
-        # Merge last-ordered info and SORT — ensure string keys on both sides
+        # Merge last-ordered info (force string keys both sides)
         last_map = last_info_map()
 
         cat2 = catalog.copy()
@@ -274,14 +285,14 @@ with tabs[0]:
             key = table["last_ordered_at"].fillna(pd.Timestamp("1900-01-01"))
             table = table.iloc[key.sort_values(ascending=False).index]
 
-        # Filter by search
+        # Search filter
         if search:
             table = table[table["item"].str.contains(search, case=False, na=False)]
 
-        # ------- PERSISTENT QTY PREFILL -------
+        # Persistent qty prefill
         qty_map = st.session_state["qty_map"]
 
-        # Optional: prefill from last order if qty_map is empty
+        # Prefill from last order only if map is empty
         if not qty_map and not last_order_df.empty:
             for _, r in last_order_df.iterrows():
                 qty_map[qkey(str(r["item"]), str(r["product_number"]))] = int(r["qty"])
@@ -308,7 +319,7 @@ with tabs[0]:
             key="order_editor",
         )
 
-        # WRITE BACK CHANGES from visible rows to persistent map
+        # Write back to qty_map (visible rows)
         for _, r in edited.iterrows():
             k = qkey(str(r["item"]), str(r["product_number"]))
             try:
@@ -320,7 +331,6 @@ with tabs[0]:
         b1, b2 = st.columns(2)
 
         def _selected_from_state() -> pd.DataFrame:
-            """Collect all qty>0 across the entire catalog using qty_map."""
             rows = []
             cat_lookup = set((str(c["item"]), str(c["product_number"])) for _, c in catalog.iterrows())
             for key, qty in qty_map.items():
@@ -346,9 +356,9 @@ with tabs[0]:
             return sorted([e for e in to if e])
 
         def _log_and_email(order_df: pd.DataFrame, do_decrement: bool):
-            # Save screen copy
+            # Save last generated (persists after reboot)
             write_last(order_df, orderer)
-            # Log
+            # Append to durable log CSV (persists after reboot)
             when_str = append_log(order_df, orderer)
             # Decrement inventory if chosen
             if do_decrement:
@@ -381,7 +391,7 @@ with tabs[0]:
             else:
                 st.info("Email disabled — configure .streamlit/secrets.toml [smtp].")
 
-            # Clear all quantities after a successful log
+            # Clear in-memory quantities after logging
             st.session_state["qty_map"] = {}
             st.rerun()
 
@@ -478,3 +488,31 @@ with tabs[3]:
             mime="text/csv",
             key="log_dl",
         )
+
+# ---------- Tools (Danger Zone) ----------
+with tabs[4]:
+    st.subheader("⚠️ Tools (Danger Zone)")
+    st.write("Choose what to clear. This **does not** touch your catalog, people, or emails.")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        opt_qty = st.checkbox("Clear on-screen quantities", value=True, key="clear_qty_map")
+    with col2:
+        opt_last = st.checkbox("Clear last generated order", value=True, key="clear_last")
+    with col3:
+        opt_logs = st.checkbox("Clear order logs", value=True, key="clear_logs")
+
+    confirm = st.checkbox("I understand this action cannot be undone.", key="clear_confirm")
+
+    if st.button("🧨 Clear ALL selected info", type="primary", disabled=not confirm, key="btn_clear_all"):
+        try:
+            if opt_qty:
+                st.session_state["qty_map"] = {}
+            if opt_last:
+                pd.DataFrame(columns=LAST_ORDER_COLUMNS).to_csv(LAST_PATH, index=False)
+            if opt_logs:
+                pd.DataFrame(columns=ORDER_LOG_COLUMNS).to_csv(LOG_PATH, index=False)
+            st.success("Selected data cleared.")
+            st.rerun()
+        except Exception as e:
+            st.error(f"Clear failed: {e}")
