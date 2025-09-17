@@ -762,3 +762,32 @@ with tab_logs:
                 st.rerun()
     else:
         st.info("No orders logged yet.")
+def gmail_self_test():
+    cfg = get_smtp_config()
+    steps = []
+    try:
+        if cfg["use_ssl"]:
+            s = smtplib.SMTP_SSL(cfg["host"], cfg["port"], timeout=20)
+            steps.append("Connected via SSL")
+        else:
+            s = smtplib.SMTP(cfg["host"], cfg["port"], timeout=20)
+            steps.append("Connected (plain)")
+            s.ehlo()
+            s.starttls(context=ssl.create_default_context())
+            s.ehlo()
+            steps.append("STARTTLS OK")
+
+        s.login(cfg["user"], cfg["password"])
+        steps.append("LOGIN OK")
+        s.quit()
+        st.success("✅ Gmail self-test passed: " + " → ".join(steps))
+    except smtplib.SMTPAuthenticationError as e:
+        st.error(f"❌ LOGIN FAILED: {e.smtp_code} {e.smtp_error}")
+    except smtplib.SMTPSenderRefused as e:
+        st.error(f"❌ SENDER REFUSED: {e.smtp_code} {e.smtp_error}")
+    except smtplib.SMTPRecipientsRefused as e:
+        st.error(f"❌ RECIPIENT REFUSED: {e.recipients}")
+    except smtplib.SMTPServerDisconnected as e:
+        st.error(f"❌ SERVER DISCONNECTED: {e}")
+    except Exception as e:
+        st.error(f"❌ {type(e).__name__}: {e}")
