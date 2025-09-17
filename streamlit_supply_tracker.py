@@ -397,6 +397,17 @@ with tab_inventory:
             st.success("Inventory saved.")
 
 # --- Order tab ---
+with st.expander("Email config status"):
+    smtp = st.secrets.get("smtp", {})
+    st.write("SMTP configured:", bool(smtp.get("host")))
+    st.write({
+        "host": smtp.get("host"),
+        "port": smtp.get("port"),
+        "from": smtp.get("from") or smtp.get("user"),
+        "default_to": smtp.get("to"),
+        "has_user": bool(smtp.get("user")),
+        "has_password": bool(smtp.get("password")),
+    })
 with tab_order:
     st.subheader("Create Order")
     cat = read_catalog()
