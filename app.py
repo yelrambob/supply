@@ -13,13 +13,19 @@ EMAILS_PATH = Path("data/emails.csv")
 
 # ---------- Load data ----------
 def load_catalog():
-    return pd.read_csv(CATALOG_PATH)
+    df = pd.read_csv(CATALOG_PATH)
+    df = df.dropna(subset=["product_number"])  # Prevent duplicate keys due to blanks
+    return df
 
 def load_people():
-    return [name.strip() for name in open(PEOPLE_PATH).readlines() if name.strip()]
+    if PEOPLE_PATH.exists():
+        return [name.strip() for name in open(PEOPLE_PATH).readlines() if name.strip()]
+    return ["Unknown"]
 
 def load_emails():
-    return pd.read_csv(EMAILS_PATH)
+    if EMAILS_PATH.exists():
+        return pd.read_csv(EMAILS_PATH)
+    return pd.DataFrame(columns=["email"])
 
 def load_log():
     if LOG_PATH.exists():
@@ -64,7 +70,12 @@ for i, row in filtered_catalog.iterrows():
     with col1:
         st.text(f"{row['item']} ({row['product_number']})")
     with col2:
-        qty = st.number_input(f"Qty for {row['item']}", min_value=0, step=1, key=row['product_number'])
+        qty = st.number_input(
+            f"Qty for {row['item']}",
+            min_value=0,
+            step=1,
+            key=f"{row['product_number']}_{i}"  # Ensures uniqueness
+        )
         if qty > 0:
             qty_input[row['product_number']] = {
                 "item": row['item'],
