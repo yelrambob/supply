@@ -179,3 +179,6 @@ if not log_df.empty:
     st.divider()
     st.subheader("📜 Past Orders")
     st.dataframe(log_df.sort_values("timestamp", ascending=False), use_container_width=True)
+
+st.write("Merged item count:", len(merged))
+st.dataframe(merged.head())
