@@ -82,19 +82,29 @@ filtered = catalog.copy()
 if search:
     filtered = catalog[catalog["item"].str.contains(search, case=False, na=False)]
 
-# Merge log info (last order date and orderer)
-log_df["timestamp"] = pd.to_datetime(log_df["timestamp"], errors="coerce")
-latest_log = (
-    log_df.sort_values("timestamp")
-    .dropna(subset=["item", "product_number"])
-    .groupby(["item", "product_number"])
-    .last()
-    .reset_index()
-    .rename(columns={
-        "timestamp": "last_ordered_at",
-        "orderer": "last_orderer"
-    })
-)
+# Ensure log_df exists and has expected columns
+if log_df.empty or "timestamp" not in log_df.columns:
+    latest_log = pd.DataFrame(columns=["item", "product_number", "last_ordered_at", "last_orderer"])
+else:
+    log_df["timestamp"] = pd.to_datetime(log_df["timestamp"], errors="coerce")
+    latest_log = (
+        log_df.sort_values("timestamp")
+        .dropna(subset=["item", "product_number"])
+        .groupby(["item", "product_number"])
+        .last()
+        .reset_index()
+        .rename(columns={
+            "timestamp": "last_ordered_at",
+            "orderer": "last_orderer"
+        })
+    )
+
+# Merge into catalog — not filtered!
+merged = pd.merge(catalog, latest_log, on=["item", "product_number"], how="left")
+merged["last_ordered_at"] = pd.to_datetime(merged["last_ordered_at"], errors="coerce")
+
+# Sort but preserve all rows
+merged = merged.sort_values("last_ordered_at", ascending=False, na_position="last")
 
 # Merge into filtered catalog
 merged = pd.merge(filtered, latest_log, on=["item", "product_number"], how="left")
