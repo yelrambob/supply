@@ -12,12 +12,24 @@ import base64, requests
 st.set_page_config(page_title="Supply Tracker", page_icon="📦", layout="wide")
 
 # ---------- Paths ----------
-DATA_DIR = Path("data")
-DATA_DIR.mkdir(exist_ok=True)
-CATALOG_PATH = DATA_DIR / "catalog.csv"
-LOG_PATH = DATA_DIR / "order_log.csv"
-PEOPLE_PATH = DATA_DIR / "people.txt"
-LAST_ORDER_PATH = DATA_DIR / "last_order.csv"
+# Always resolve paths relative to this file, regardless of where Streamlit is launched
+BASE_DIR = Path(__file__).resolve().parent
+
+# Data & defaults live next to this script
+DATA_DIR = (BASE_DIR / "data")
+DEFAULTS_DIR = (BASE_DIR / "defaults")
+
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+DEFAULTS_DIR.mkdir(parents=True, exist_ok=True)
+
+CATALOG_PATH   = DATA_DIR / "catalog.csv"
+LOG_PATH       = DATA_DIR / "order_log.csv"
+PEOPLE_PATH    = DATA_DIR / "people.txt"
+LAST_ORDER_PATH= DATA_DIR / "last_order.csv"
+
+# (if you use defaults)
+DEFAULT_CATALOG = DEFAULTS_DIR / "catalog.default.csv"
+DEFAULT_PEOPLE  = DEFAULTS_DIR / "people.default.txt"
 
 # Catalog now includes per-box quantity (multiplier)
 CATALOG_COLUMNS = ["item", "product_number", "current_qty", "per_box_qty", "sort_order"]
