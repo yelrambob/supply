@@ -3,7 +3,6 @@ import pandas as pd
 from pandas.errors import EmptyDataError
 from datetime import datetime
 from pathlib import Path
-import io
 import smtplib, ssl
 from email.message import EmailMessage
 
@@ -60,7 +59,6 @@ def send_email(subject: str, body: str, to_emails: list[str]):
         msg["Reply-To"] = s["reply_to"]
     msg["To"] = ", ".join(to_emails)
     msg.set_content(body)
-
     with smtplib.SMTP_SSL(s["server"], int(s["port"]), context=ctx) as server:
         server.login(s["username"], s["password"])
         server.send_message(msg)
@@ -81,7 +79,6 @@ def read_emails() -> pd.DataFrame:
     df = safe_read_csv(EMAILS_PATH)
     if df.empty:
         return pd.DataFrame(columns=["name", "email"])
-    # normalize cols
     df.columns = [str(c).strip().lower() for c in df.columns]
     if "email" not in df.columns:
         return pd.DataFrame(columns=["name", "email"])
@@ -96,20 +93,15 @@ def read_catalog() -> pd.DataFrame:
     df = safe_read_csv(CATALOG_PATH)
     if df.empty:
         return pd.DataFrame(columns=["item", "product_number", "current_qty", "sort_order"])
-    # normalize expected cols
     for c in ["item", "product_number", "current_qty", "sort_order"]:
         if c not in df.columns:
             df[c] = pd.NA
-    # types
     df["item"] = df["item"].astype(str).str.strip()
     df["product_number"] = df["product_number"].astype(str).str.strip()
     df["current_qty"] = pd.to_numeric(df["current_qty"], errors="coerce").fillna(0).astype(int)
-
     so = pd.to_numeric(df["sort_order"], errors="coerce")
     filler = pd.Series(range(len(df)), index=df.index)
     df["sort_order"] = so.fillna(filler).astype(int)
-
-    # drop unusable rows
     df = df[(df["item"] != "") & (df["product_number"] != "")]
     return df[["item", "product_number", "current_qty", "sort_order"]].reset_index(drop=True)
 
@@ -138,7 +130,6 @@ def append_log(order_df: pd.DataFrame, orderer: str) -> str:
     df["orderer"] = orderer
     expected = ORDER_LOG_COLUMNS
     df = df[expected]
-
     prev = safe_read_csv(LOG_PATH)
     if not prev.empty:
         for c in expected:
@@ -147,7 +138,6 @@ def append_log(order_df: pd.DataFrame, orderer: str) -> str:
         combined = pd.concat([prev[expected], df], ignore_index=True)
     else:
         combined = df
-
     combined.to_csv(LOG_PATH, index=False)
     return now
 
@@ -177,6 +167,13 @@ def last_info_map() -> pd.DataFrame:
     tail = tail.rename(columns={"ordered_at":"last_ordered_at","qty":"last_qty","orderer":"last_orderer"})
     return tail[["item","product_number","last_ordered_at","last_qty","last_orderer"]]
 
+# ---------------- Persisted qty map ----------------
+def qkey(item: str, pn: str) -> str:
+    return f"{item}||{str(pn)}"
+
+if "qty_map" not in st.session_state:
+    st.session_state["qty_map"] = {}   # {(item||pn): int}
+
 # ---------------- UI ----------------
 st.title("📦 Supply Ordering & Inventory Tracker")
 
@@ -186,14 +183,12 @@ catalog = read_catalog()
 logs = read_log()
 last_order_df = read_last()
 
-# Quick info line
 st.caption(f"Loaded {len(catalog)} catalog rows • {len(logs)} log rows • Email configured: {'✅' if smtp_ok() else '❌'}")
 
 tabs = st.tabs(["Create Order", "Adjust Inventory", "Catalog", "Order Logs"])
 
 # ---------- Create Order ----------
 with tabs[0]:
-    # Collapsible "last generated" block (so it doesn't clutter the top)
     with st.expander("📋 Last generated order (copy/download)", expanded=False):
         if last_order_df.empty:
             st.info("No previous order.")
@@ -213,8 +208,7 @@ with tabs[0]:
     if catalog.empty:
         st.info("No catalog found. Put your list in data/catalog.csv (columns: item, product_number[, current_qty, sort_order]).")
     else:
-        # Controls row
-        c1, c2, c3 = st.columns([2, 2, 2])
+        c1, c2, c3, c4 = st.columns([2, 2, 2, 2])
         with c1:
             orderer = st.selectbox(
                 "Who is ordering?",
@@ -226,13 +220,16 @@ with tabs[0]:
             cc_orderer = st.checkbox("CC the orderer (if email match)", value=True, key="order_cc_orderer")
         with c3:
             search = st.text_input("Search items", key="order_search")
+        with c4:
+            if st.button("🧼 Clear quantities", use_container_width=True, key="btn_clear_qty"):
+                st.session_state["qty_map"] = {}
+                st.success("Cleared all quantities.")
 
-        # Merge "last ordered" info for display/sort
+        # Merge last-ordered info and sort
         last_map = last_info_map()
         table = catalog.merge(last_map, on=["item","product_number"], how="left")
         table["last_ordered_at"] = pd.to_datetime(table.get("last_ordered_at"), errors="coerce")
 
-        # Sorting selector
         sort_choice = st.selectbox(
             "Sort by",
             options=["Last ordered (newest first)", "Original order", "Name A→Z", "Product # asc"],
@@ -245,17 +242,29 @@ with tabs[0]:
             table = table.sort_values(["item"], kind="stable")
         elif sort_choice == "Product # asc":
             table = table.sort_values(["product_number","item"], kind="stable")
-        else:  # newest first
+        else:
             key = table["last_ordered_at"].fillna(pd.Timestamp("1900-01-01"))
             table = table.iloc[key.sort_values(ascending=False).index]
 
-        # Search filter
+        # Filter by search
         if search:
             table = table[table["item"].str.contains(search, case=False, na=False)]
 
-        # Display spreadsheet-like table with a Qty column
+        # ------- PERSISTENT QTY PREFILL -------
+        qty_map = st.session_state["qty_map"]
+
+        # Optional convenience: prefill from last order only if qty_map is empty
+        if not qty_map and not last_order_df.empty:
+            for _, r in last_order_df.iterrows():
+                qty_map[qkey(r["item"], r["product_number"])] = int(r["qty"])
+
+        # Build the qty column from the persistent map
+        def get_qty(row) -> int:
+            return int(qty_map.get(qkey(row["item"], row["product_number"]), 0))
+
         table = table.copy()
-        table["qty"] = 0
+        table["qty"] = table.apply(get_qty, axis=1)
+
         show_cols = ["qty", "item", "product_number", "last_ordered_at", "last_qty", "last_orderer"]
         edited = st.data_editor(
             table[show_cols],
@@ -272,34 +281,49 @@ with tabs[0]:
             key="order_editor",
         )
 
-        # Buttons right under the table for quick access
+        # ------- WRITE BACK TO PERSISTENT MAP (only visible rows changed) -------
+        # This lets qty survive any new searches / sorts / tab switches.
+        for _, r in edited.iterrows():
+            k = qkey(r["item"], r["product_number"])
+            try:
+                qty_map[k] = int(r["qty"]) if pd.notna(r["qty"]) else 0
+            except Exception:
+                qty_map[k] = 0
+
+        # Buttons under the table
         b1, b2 = st.columns(2)
 
-        def _selected_from_editor(df: pd.DataFrame) -> pd.DataFrame:
-            chosen = df[df["qty"] > 0].copy()
-            if chosen.empty:
+        def _selected_from_state() -> pd.DataFrame:
+            """Collect all qty>0 from the persistent map across the entire catalog."""
+            rows = []
+            cat_lookup = set((c["item"], str(c["product_number"])) for _, c in catalog.iterrows())
+            for key, qty in qty_map.items():
+                if qty and qty > 0:
+                    item, pn = key.split("||", 1)
+                    if (item, pn) in cat_lookup:
+                        rows.append({"item": item, "product_number": pn, "qty": int(qty)})
+            df = pd.DataFrame(rows)
+            if df.empty:
                 st.error("Please set Qty > 0 for at least one item.")
-                return pd.DataFrame()
             if not people or orderer == "(add names in data/people.txt)":
                 st.error("Please add/select an orderer in data/people.txt.")
                 return pd.DataFrame()
-            return chosen[["item","product_number","qty"]].copy()
+            return df
 
         def _email_recipients(orderer_name: str, cc_orderer_flag: bool) -> list[str]:
-            recips = read_emails()
-            to = set(recips["email"].tolist())
+            recips = emails_df
+            to = set(recips["email"].tolist()) if not recips.empty else set()
             if cc_orderer_flag and orderer_name and not recips.empty:
                 match = recips[recips["name"].str.strip().str.lower() == orderer_name.strip().lower()]
                 to.update(match["email"].tolist())
             return sorted([e for e in to if e])
 
         def _log_and_email(order_df: pd.DataFrame, do_decrement: bool):
-            # Save screen copy
+            # Save screen copy (for the expander)
             write_last(order_df, orderer)
-            # Log rows
+            # Log
             when_str = append_log(order_df, orderer)
-
-            # Optionally decrement current_qty
+            # Decrement inventory if chosen
             if do_decrement:
                 cat2 = catalog.copy()
                 for _, r in order_df.iterrows():
@@ -308,8 +332,7 @@ with tabs[0]:
                         pd.to_numeric(cat2.loc[mask, "current_qty"], errors="coerce").fillna(0).astype(int) - int(r["qty"])
                     ).clip(lower=0)
                 write_catalog(cat2)
-
-            # Email everyone in emails.csv (and cc orderer if chosen)
+            # Email
             if smtp_ok():
                 recipients = _email_recipients(orderer, cc_orderer)
                 if recipients:
@@ -331,17 +354,19 @@ with tabs[0]:
             else:
                 st.info("Email disabled — configure .streamlit/secrets.toml [smtp].")
 
+            # Clear all quantities after a successful log
+            st.session_state["qty_map"] = {}
             st.rerun()
 
         with b1:
             if st.button("🧾 Generate & Log Order", use_container_width=True, key="btn_log"):
-                selected = _selected_from_editor(edited)
+                selected = _selected_from_state()
                 if not selected.empty:
                     _log_and_email(selected, do_decrement=False)
 
         with b2:
             if st.button("🧾 Generate, Log, & Decrement", use_container_width=True, key="btn_log_dec"):
-                selected = _selected_from_editor(edited)
+                selected = _selected_from_state()
                 if not selected.empty:
                     _log_and_email(selected, do_decrement=True)
 
@@ -368,7 +393,7 @@ with tabs[1]:
             write_catalog(edited)
             st.success("Inventory saved.")
 
-# ---------- Catalog (read-only + quick add/remove) ----------
+# ---------- Catalog ----------
 with tabs[2]:
     st.caption("Catalog source: data/catalog.csv")
     if catalog.empty:
@@ -426,24 +451,3 @@ with tabs[3]:
             mime="text/csv",
             key="log_dl",
         )
-
-        # Quick clearing tools
-        st.markdown("### Clear 'Last ordered' history")
-        pairs = logs[["item","product_number"]].drop_duplicates().sort_values(["item","product_number"])
-        pairs["label"] = pairs.apply(lambda r: f"{r['item']} — {r['product_number']}", axis=1)
-        to_clear = st.multiselect("Select items to clear from history", pairs["label"].tolist(), key="log_clear_sel")
-        c1, c2 = st.columns(2)
-        with c1:
-            if st.button("🧹 Clear selected", key="log_clear_selected"):
-                if to_clear:
-                    keep = ~logs.apply(lambda r: f"{r['item']} — {r['product_number']}" in set(to_clear), axis=1)
-                    logs[keep].to_csv(LOG_PATH, index=False)
-                    st.success(f"Cleared {len(logs) - keep.sum()} rows.")
-                    st.rerun()
-                else:
-                    st.info("No items selected.")
-        with c2:
-            if st.button("🗑️ Clear ALL history", key="log_clear_all"):
-                ensure_headers(LOG_PATH, ORDER_LOG_COLUMNS)
-                st.success("Cleared entire order history.")
-                st.rerun()
