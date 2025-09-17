@@ -7,6 +7,7 @@ from pandas.errors import EmptyDataError
 from shutil import copy2
 import smtplib, ssl
 from email.message import EmailMessage
+import base64, requests
 
 st.set_page_config(page_title="Supply Tracker", page_icon="📦", layout="wide")
 
@@ -73,6 +74,47 @@ def safe_ensure_file_with_header(path: Path, columns):
 # Ensure expected files exist with correct headers
 safe_ensure_file_with_header(LAST_ORDER_PATH, LAST_ORDER_COLUMNS)
 safe_ensure_file_with_header(LOG_PATH, ORDER_LOG_COLUMNS)
+
+def get_gh_cfg():
+    gh = st.secrets.get("github", {})
+    return {
+        "token": gh.get("token", "").strip(),
+        "repo": gh.get("repo", "").strip(),     # e.g. "yelrambob/order_supply"
+        "branch": gh.get("branch", "main").strip() or "main",
+        "api": "https://api.github.com",
+    }
+
+def gh_get_sha(path_in_repo: str):
+    cfg = get_gh_cfg()
+    if not cfg["token"] or not cfg["repo"]:
+        return None
+    url = f'{cfg["api"]}/repos/{cfg["repo"]}/contents/{path_in_repo}'
+    r = requests.get(url, params={"ref": cfg["branch"]},
+                     headers={"Authorization": f'Bearer {cfg["token"]}',
+                              "Accept": "application/vnd.github+json"})
+    if r.status_code == 200:
+        return r.json().get("sha")
+    return None  # file may not exist yet
+
+def gh_put_file(path_in_repo: str, content_bytes: bytes, commit_message: str):
+    cfg = get_gh_cfg()
+    if not cfg["token"] or not cfg["repo"]:
+        raise RuntimeError("GitHub not configured in secrets.")
+    url = f'{cfg["api"]}/repos/{cfg["repo"]}/contents/{path_in_repo}'
+    sha = gh_get_sha(path_in_repo)
+    payload = {
+        "message": commit_message,
+        "branch": cfg["branch"],
+        "content": base64.b64encode(content_bytes).decode("utf-8"),
+    }
+    if sha:
+        payload["sha"] = sha
+    r = requests.put(url, json=payload,
+                     headers={"Authorization": f'Bearer {cfg["token"]}',
+                              "Accept": "application/vnd.github+json"})
+    if r.status_code not in (200, 201):
+        raise RuntimeError(f"GitHub PUT failed {r.status_code}: {r.text}")
+    return r.json()
 
 # ---------- Email helpers (Gmail/SMTP friendly) ----------
 def get_smtp_config():
@@ -498,6 +540,31 @@ if st.sidebar.button("Force seed catalog from defaults", key="force_seed_catalog
             st.sidebar.error("defaults/catalog.default.csv not found.")
     except Exception as e:
         st.sidebar.error(f"Force seed failed: {e}")
+
+st.sidebar.divider()
+st.sidebar.subheader("Sync defaults to GitHub")
+
+if st.sidebar.button("⬆️ Push defaults to GitHub", key="push_defaults_btn"):
+    try:
+        # ensure files exist
+        if DEFAULT_CATALOG.exists():
+            cat_bytes = DEFAULT_CATALOG.read_bytes()
+            gh_put_file("defaults/catalog.default.csv", cat_bytes,
+                        commit_message=f"Update catalog.default.csv ({datetime.now().isoformat(timespec='seconds')})")
+        else:
+            st.sidebar.warning("defaults/catalog.default.csv not found; skipping.")
+
+        if DEFAULT_PEOPLE.exists():
+            ppl_bytes = DEFAULT_PEOPLE.read_bytes()
+            gh_put_file("defaults/people.default.txt", ppl_bytes,
+                        commit_message=f"Update people.default.txt ({datetime.now().isoformat(timespec='seconds')})")
+        else:
+            st.sidebar.warning("defaults/people.default.txt not found; skipping.")
+
+        st.sidebar.success("Pushed defaults to GitHub.")
+    except Exception as e:
+        st.sidebar.error(f"Push failed: {e}")
+
 # ---------- Main ----------
 st.title("📦 Supply Ordering & Inventory Tracker")
 
