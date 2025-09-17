@@ -94,17 +94,24 @@ def save_people(people):
     PEOPLE_PATH.write_text("\n".join(people), encoding="utf-8")
 
 def init_catalog(upload_bytes):
+    """Backup existing catalog (if any) then replace with uploaded CSV (after cleaning)."""
     if upload_bytes is not None:
         raw = pd.read_csv(io.BytesIO(upload_bytes))
         tidy = clean_catalog(raw)
         if tidy.empty:
             st.error("Uploaded file couldn't be parsed into a catalog. Please check columns.")
+            return
+        # Backup if exists
         if CATALOG_PATH.exists():
             backup = CATALOG_PATH.with_name(f"catalog_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv")
-            copy2(CATALOG_PATH, backup)
-        else:
-            tidy.to_csv(CATALOG_PATH, index=False)
-            st.success(f"Catalog created with {len(tidy)} items.")
+            try:
+                copy2(CATALOG_PATH, backup)
+                st.info(f"Backed up existing catalog to {backup.name}")
+            except Exception as e:
+                st.warning(f"Backup failed (continuing): {e}")
+        # Write new
+        tidy.to_csv(CATALOG_PATH, index=False)
+        st.success(f"Catalog created/replaced with {len(tidy)} items.")
     else:
         if not CATALOG_PATH.exists():
             st.info("No catalog found. Upload your supply CSV in the sidebar to create one.")
@@ -216,8 +223,8 @@ def last_order_info_map() -> pd.DataFrame:
 
 # ---------- Sidebar: Setup & People ----------
 st.sidebar.header("Setup")
-uploaded = st.sidebar.file_uploader("Upload supply list (CSV)", type=["csv"], help="Wide or tidy CSV.")
-if st.sidebar.button("Initialize / Replace Catalog"):
+uploaded = st.sidebar.file_uploader("Upload supply list (CSV)", type=["csv"], help="Wide or tidy CSV.", key="uploader")
+if st.sidebar.button("Initialize / Replace Catalog", key="init_replace_btn"):
     init_catalog(uploaded.getvalue() if uploaded is not None else None)
     st.cache_data.clear()
     st.rerun()
@@ -225,16 +232,16 @@ if st.sidebar.button("Initialize / Replace Catalog"):
 st.sidebar.divider()
 st.sidebar.subheader("Orderers")
 people = load_people()
-add_person = st.sidebar.text_input("Add person")
-if st.sidebar.button("Add to list") and add_person.strip():
+add_person = st.sidebar.text_input("Add person", key="add_person_input")
+if st.sidebar.button("Add to list", key="add_person_btn") and add_person.strip():
     people.append(add_person.strip())
     people = sorted(set(people))
     save_people(people)
     st.sidebar.success(f"Added '{add_person.strip()}'")
     st.rerun()
 if people:
-    remove_person = st.sidebar.selectbox("Remove person", ["(choose)"] + people)
-    if st.sidebar.button("Remove") and remove_person != "(choose)":
+    remove_person = st.sidebar.selectbox("Remove person", ["(choose)"] + people, key="remove_person_select")
+    if st.sidebar.button("Remove", key="remove_person_btn") and remove_person != "(choose)":
         people = [p for p in people if p != remove_person]
         save_people(people)
         st.sidebar.success(f"Removed '{remove_person}'")
@@ -252,10 +259,11 @@ with tab_catalog:
     st.subheader("Catalog")
     cat = read_catalog()
     st.dataframe(cat, use_container_width=True, hide_index=True)
-    # Buttons to reload from disk and/or download current catalog
+
+    # Reload / Download (unique keys)
     col_reload, col_download = st.columns(2)
     with col_reload:
-        if st.button("🔄 Reload catalog from disk"):
+        if st.button("🔄 Reload catalog from disk", key="catalog_reload_btn"):
             st.cache_data.clear()   # clear cached read_catalog()
             st.rerun()              # re-run so UI picks up changes from data/catalog.csv
     with col_download:
@@ -264,34 +272,21 @@ with tab_catalog:
             data=cat.to_csv(index=False).encode("utf-8"),
             file_name="catalog.csv",
             mime="text/csv",
+            key="catalog_download_btn",
         )
 
-# Buttons to reload from disk and/or download current catalog
-    col_reload, col_download = st.columns(2)
-    with col_reload:
-        if st.button("🔄 Reload catalog from disk"):
-            st.cache_data.clear()   # clear cached read_catalog()
-            st.rerun()              # re-run so UI picks up changes from data/catalog.csv
-    with col_download:
-        st.download_button(
-            "⬇️ Download catalog.csv",
-            data=cat.to_csv(index=False).encode("utf-8"),
-            file_name="catalog.csv",
-            mime="text/csv",
-        )
-    
     st.markdown("**Add new item**")
     c1, c2 = st.columns([2, 1])
     with c1:
-        new_item = st.text_input("Item name")
+        new_item = st.text_input("Item name", key="catalog_new_item")
     with c2:
-        new_prod = st.text_input("Product #", help="Digits only if possible.")
+        new_prod = st.text_input("Product #", help="Digits only if possible.", key="catalog_new_prod")
     c3, c4 = st.columns([1, 1])
     with c3:
-        new_qty = st.number_input("Starting qty (optional)", min_value=0, value=0, step=1)
+        new_qty = st.number_input("Starting qty (optional)", min_value=0, value=0, step=1, key="catalog_new_qty")
     with c4:
         st.markdown("&nbsp;")
-        if st.button("➕ Add item", use_container_width=True):
+        if st.button("➕ Add item", use_container_width=True, key="catalog_add_item"):
             if new_item.strip() and new_prod.strip():
                 next_order = (cat["sort_order"].max() + 1) if not cat.empty else 0
                 new_row = pd.DataFrame(
@@ -302,16 +297,18 @@ with tab_catalog:
                     subset=["item", "product_number"], keep="last"
                 )
                 write_catalog(updated)
+                st.cache_data.clear()
                 st.success(f"Added: {new_item.strip()}")
                 st.rerun()
             else:
                 st.error("Please provide both Item and Product #.")
     st.markdown("---")
     if not cat.empty:
-        to_remove = st.multiselect("Select item(s) to remove", cat["item"].tolist())
-        if st.button("🗑️ Remove selected"):
+        to_remove = st.multiselect("Select item(s) to remove", cat["item"].tolist(), key="catalog_remove_multi")
+        if st.button("🗑️ Remove selected", key="catalog_remove_btn"):
             updated = cat[~cat["item"].isin(to_remove)]
             write_catalog(updated)
+            st.cache_data.clear()
             st.success(f"Removed {len(to_remove)} item(s).")
             st.rerun()
 
@@ -336,10 +333,13 @@ with tab_inventory:
                 "current_qty": st.column_config.NumberColumn("Current Qty", min_value=0, step=1),
                 "sort_order": st.column_config.NumberColumn("Sort order", min_value=0, step=1),
             },
+            key="inventory_editor",
         )
-        if st.button("💾 Save changes"):
+        if st.button("💾 Save changes", key="inventory_save_btn"):
             write_catalog(edited)
+            st.cache_data.clear()
             st.success("Inventory saved.")
+            st.rerun()
 
 # --- Order tab ---
 with tab_order:
@@ -357,7 +357,7 @@ with tab_order:
             gen_by = last_order_df["orderer"].iloc[0] if "orderer" in last_order_df.columns else ""
             with top_box:
                 st.markdown("### Order to paste into your other system")
-                st.text_area("Copy/paste", value="\n".join(lines), height=160)
+                st.text_area("Copy/paste", value="\n".join(lines), height=160, key="order_copy_text")
                 if gen_at or gen_by:
                     st.caption(f"Generated at {gen_at} by {gen_by}")
                 st.download_button(
@@ -365,6 +365,7 @@ with tab_order:
                     data=last_order_df[["item","product_number","qty"]].to_csv(index=False).encode("utf-8"),
                     file_name=f"order_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                     mime="text/csv",
+                    key="order_top_download_btn",
                 )
         else:
             with top_box:
@@ -375,8 +376,9 @@ with tab_order:
         orderer = st.selectbox(
             "Who is placing the order?",
             options=(people if people else ["(add names in sidebar)"]),
+            key="orderer_select",
         )
-        search = st.text_input("Search items")
+        search = st.text_input("Search items", key="order_search")
 
         # Merge last-ordered info into catalog
         loi = last_order_info_map()
@@ -390,6 +392,7 @@ with tab_order:
             "Sort items by",
             options=["Original order", "Last ordered (newest first)", "Last ordered (oldest first)", "Product # asc", "Name A→Z"],
             index=1,  # default newest first
+            key="order_sort_choice",
         )
         if sort_choice == "Original order":
             table = table.sort_values(["sort_order", "item"], kind="stable")
@@ -432,6 +435,7 @@ with tab_order:
                 "last_ordered_at": st.column_config.DatetimeColumn("Last ordered", format="YYYY-MM-DD HH:mm", disabled=True),
                 "last_qty": st.column_config.NumberColumn("Last qty", disabled=True),
             },
+            key="order_editor",
         )
 
         # Helpers
@@ -459,22 +463,20 @@ with tab_order:
                         pd.to_numeric(cat2.loc[mask, "current_qty"], errors="coerce").fillna(0).astype(int) - int(r["qty"])
                     ).clip(lower=0)
                 write_catalog(cat2)
+                st.cache_data.clear()  # inventory changed
 
-            # Rebuild copy list into session then refresh so "Last ordered" updates
-            lines = [f"{r['item']} — {r['product_number']} — Qty {r['qty']}" for _, r in order_df.iterrows()]
-            st.session_state["copy_text"] = "\n".join(lines)
-            st.session_state["copy_meta"] = f"Generated at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} by {orderer}"
+            # refresh so "Last ordered" updates and top box repaints
             st.rerun()
 
         # --- TWO BUTTONS (both generate & log, second also decrements) ---
         c1, c2 = st.columns(2)
         with c1:
-            if st.button("🧾 Generate & Log Order"):
+            if st.button("🧾 Generate & Log Order", key="order_generate_log_btn"):
                 odf = _make_order_df_from(edited)
                 if not odf.empty:
                     _save_and_log(odf, do_decrement=False)
         with c2:
-            if st.button("🧾 Generate, Log, & Decrement"):
+            if st.button("🧾 Generate, Log, & Decrement", key="order_generate_log_dec_btn"):
                 odf = _make_order_df_from(edited)
                 if not odf.empty:
                     _save_and_log(odf, do_decrement=True)
@@ -487,10 +489,10 @@ with tab_order:
                 st.info("No items to clear.")
             else:
                 pairs["label"] = pairs.apply(lambda r: f"{r['item']} — {r['product_number']}", axis=1)
-                to_clear = st.multiselect("Select items to clear from last-ordered history", pairs["label"].tolist())
+                to_clear = st.multiselect("Select items to clear from last-ordered history", pairs["label"].tolist(), key="order_tools_clear_multi")
                 colx, coly, colz = st.columns([1,1,2])
                 with colx:
-                    if st.button("🧹 Clear selected history"):
+                    if st.button("🧹 Clear selected history", key="order_tools_clear_selected"):
                         logs = safe_read_csv(LOG_PATH)
                         if logs.empty or not to_clear:
                             st.info("Nothing to clear.")
@@ -498,52 +500,4 @@ with tab_order:
                             sel = set(to_clear)
                             keep = ~logs.apply(lambda r: f"{r['item']} — {r['product_number']}" in sel, axis=1)
                             new_logs = logs[keep].copy()
-                            new_logs.to_csv(LOG_PATH, index=False)
-                            st.success(f"Cleared {len(logs) - len(new_logs)} log rows for selected items.")
-                            st.rerun()
-                with coly:
-                    if st.button("🗑️ Clear ALL history"):
-                        pd.DataFrame(columns=ORDER_LOG_COLUMNS).to_csv(LOG_PATH, index=False)
-                        st.success("Cleared entire order history.")
-                        st.rerun()
-                with colz:
-                    if st.button("🧼 Clear last generated order (screen list only)"):
-                        pd.DataFrame(columns=LAST_ORDER_COLUMNS).to_csv(LAST_ORDER_PATH, index=False)
-                        st.success("Cleared last generated order list.")
-                        st.rerun()
-
-# --- Logs tab ---
-with tab_logs:
-    st.subheader("Order Logs")
-    logs = safe_read_csv(LOG_PATH)
-    if not logs.empty:
-        st.dataframe(logs.sort_values("ordered_at", ascending=False), use_container_width=True, hide_index=True)
-        st.download_button(
-            "⬇️ Download full log (CSV)",
-            data=logs.to_csv(index=False).encode("utf-8"),
-            file_name="order_log.csv",
-            mime="text/csv",
-        )
-        st.markdown("### Clear 'Last ordered' history (same as Tools)")
-        pairs = logs[["item", "product_number"]].drop_duplicates().sort_values(["item", "product_number"])
-        pairs["label"] = pairs.apply(lambda r: f"{r['item']} — {r['product_number']}", axis=1)
-        to_clear = st.multiselect("Select items to clear from history", pairs["label"].tolist(), key="log_clear")
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("🧹 Clear selected", key="log_clear_btn"):
-                if to_clear:
-                    sel = set(to_clear)
-                    keep = ~logs.apply(lambda r: f"{r['item']} — {r['product_number']}" in sel, axis=1)
-                    new_logs = logs[keep].copy()
-                    new_logs.to_csv(LOG_PATH, index=False)
-                    st.success(f"Cleared {len(logs) - len(new_logs)} log rows for selected items.")
-                    st.rerun()
-                else:
-                    st.info("No items selected.")
-        with col2:
-            if st.button("🗑️ Clear ALL history", key="log_clear_all"):
-                pd.DataFrame(columns=ORDER_LOG_COLUMNS).to_csv(LOG_PATH, index=False)
-                st.success("Cleared entire order history.")
-                st.rerun()
-    else:
-        st.info("No orders logged yet.")
+                            new_logs.to_csv(LOG_PATH, index
