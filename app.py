@@ -97,7 +97,7 @@ def read_catalog() -> pd.DataFrame:
         if c not in df.columns:
             df[c] = pd.NA
     df["item"] = df["item"].astype(str).str.strip()
-    df["product_number"] = df["product_number"].astype(str).str.strip()
+    df["product_number"] = df["product_number"].astype(str).str.strip()  # STRING KEY
     df["current_qty"] = pd.to_numeric(df["current_qty"], errors="coerce").fillna(0).astype(int)
     so = pd.to_numeric(df["sort_order"], errors="coerce")
     filler = pd.Series(range(len(df)), index=df.index)
@@ -107,6 +107,8 @@ def read_catalog() -> pd.DataFrame:
 
 def write_catalog(df: pd.DataFrame):
     df = df.copy()
+    df["item"] = df["item"].astype(str)
+    df["product_number"] = df["product_number"].astype(str)
     df["current_qty"] = pd.to_numeric(df.get("current_qty", 0), errors="coerce").fillna(0).astype(int)
     so = pd.to_numeric(df.get("sort_order", pd.Series(range(len(df)))), errors="coerce")
     df["sort_order"] = so.fillna(pd.Series(range(len(df)), index=df.index)).astype(int)
@@ -121,6 +123,8 @@ def read_log() -> pd.DataFrame:
             df[c] = pd.NA
     df["ordered_at"] = pd.to_datetime(df["ordered_at"], errors="coerce")
     df["qty"] = pd.to_numeric(df["qty"], errors="coerce").fillna(0).astype(int)
+    df["item"] = df["item"].astype(str)
+    df["product_number"] = df["product_number"].astype(str)  # STRING KEY
     return df[ORDER_LOG_COLUMNS].sort_values("ordered_at", ascending=False)
 
 def append_log(order_df: pd.DataFrame, orderer: str) -> str:
@@ -128,6 +132,8 @@ def append_log(order_df: pd.DataFrame, orderer: str) -> str:
     df = order_df.copy()
     df["ordered_at"] = now
     df["orderer"] = orderer
+    df["item"] = df["item"].astype(str)
+    df["product_number"] = df["product_number"].astype(str)
     expected = ORDER_LOG_COLUMNS
     df = df[expected]
     prev = safe_read_csv(LOG_PATH)
@@ -135,6 +141,8 @@ def append_log(order_df: pd.DataFrame, orderer: str) -> str:
         for c in expected:
             if c not in prev.columns:
                 prev[c] = pd.NA
+        prev["item"] = prev["item"].astype(str)
+        prev["product_number"] = prev["product_number"].astype(str)
         combined = pd.concat([prev[expected], df], ignore_index=True)
     else:
         combined = df
@@ -149,12 +157,16 @@ def read_last() -> pd.DataFrame:
         if c not in df.columns:
             df[c] = pd.NA
     df["qty"] = pd.to_numeric(df["qty"], errors="coerce").fillna(0).astype(int)
+    df["item"] = df["item"].astype(str)
+    df["product_number"] = df["product_number"].astype(str)
     return df[LAST_ORDER_COLUMNS]
 
 def write_last(df: pd.DataFrame, orderer: str):
     out = df.copy()
     out["generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     out["orderer"] = orderer
+    out["item"] = out["item"].astype(str)
+    out["product_number"] = out["product_number"].astype(str)
     out = out[LAST_ORDER_COLUMNS]
     out.to_csv(LAST_PATH, index=False)
 
@@ -162,9 +174,14 @@ def last_info_map() -> pd.DataFrame:
     logs = read_log()
     if logs.empty:
         return pd.DataFrame(columns=["item","product_number","last_ordered_at","last_qty","last_orderer"])
+    logs = logs.copy()
+    logs["item"] = logs["item"].astype(str)
+    logs["product_number"] = logs["product_number"].astype(str)
     logs = logs.sort_values("ordered_at")
     tail = logs.groupby(["item","product_number"], as_index=False).tail(1)
     tail = tail.rename(columns={"ordered_at":"last_ordered_at","qty":"last_qty","orderer":"last_orderer"})
+    tail["item"] = tail["item"].astype(str)
+    tail["product_number"] = tail["product_number"].astype(str)
     return tail[["item","product_number","last_ordered_at","last_qty","last_orderer"]]
 
 # ---------------- Persisted qty map ----------------
@@ -189,6 +206,7 @@ tabs = st.tabs(["Create Order", "Adjust Inventory", "Catalog", "Order Logs"])
 
 # ---------- Create Order ----------
 with tabs[0]:
+    # Expander for last generated
     with st.expander("📋 Last generated order (copy/download)", expanded=False):
         if last_order_df.empty:
             st.info("No previous order.")
@@ -225,9 +243,19 @@ with tabs[0]:
                 st.session_state["qty_map"] = {}
                 st.success("Cleared all quantities.")
 
-        # Merge last-ordered info and sort
+        # Merge last-ordered info and SORT — ensure string keys on both sides
         last_map = last_info_map()
-        table = catalog.merge(last_map, on=["item","product_number"], how="left")
+
+        cat2 = catalog.copy()
+        cat2["item"] = cat2["item"].astype(str)
+        cat2["product_number"] = cat2["product_number"].astype(str)
+
+        lm2 = last_map.copy()
+        if not lm2.empty:
+            lm2["item"] = lm2["item"].astype(str)
+            lm2["product_number"] = lm2["product_number"].astype(str)
+
+        table = cat2.merge(lm2, on=["item","product_number"], how="left")
         table["last_ordered_at"] = pd.to_datetime(table.get("last_ordered_at"), errors="coerce")
 
         sort_choice = st.selectbox(
@@ -253,12 +281,11 @@ with tabs[0]:
         # ------- PERSISTENT QTY PREFILL -------
         qty_map = st.session_state["qty_map"]
 
-        # Optional convenience: prefill from last order only if qty_map is empty
+        # Optional: prefill from last order if qty_map is empty
         if not qty_map and not last_order_df.empty:
             for _, r in last_order_df.iterrows():
-                qty_map[qkey(r["item"], r["product_number"])] = int(r["qty"])
+                qty_map[qkey(str(r["item"]), str(r["product_number"]))] = int(r["qty"])
 
-        # Build the qty column from the persistent map
         def get_qty(row) -> int:
             return int(qty_map.get(qkey(row["item"], row["product_number"]), 0))
 
@@ -281,10 +308,9 @@ with tabs[0]:
             key="order_editor",
         )
 
-        # ------- WRITE BACK TO PERSISTENT MAP (only visible rows changed) -------
-        # This lets qty survive any new searches / sorts / tab switches.
+        # WRITE BACK CHANGES from visible rows to persistent map
         for _, r in edited.iterrows():
-            k = qkey(r["item"], r["product_number"])
+            k = qkey(str(r["item"]), str(r["product_number"]))
             try:
                 qty_map[k] = int(r["qty"]) if pd.notna(r["qty"]) else 0
             except Exception:
@@ -294,9 +320,9 @@ with tabs[0]:
         b1, b2 = st.columns(2)
 
         def _selected_from_state() -> pd.DataFrame:
-            """Collect all qty>0 from the persistent map across the entire catalog."""
+            """Collect all qty>0 across the entire catalog using qty_map."""
             rows = []
-            cat_lookup = set((c["item"], str(c["product_number"])) for _, c in catalog.iterrows())
+            cat_lookup = set((str(c["item"]), str(c["product_number"])) for _, c in catalog.iterrows())
             for key, qty in qty_map.items():
                 if qty and qty > 0:
                     item, pn = key.split("||", 1)
@@ -305,6 +331,7 @@ with tabs[0]:
             df = pd.DataFrame(rows)
             if df.empty:
                 st.error("Please set Qty > 0 for at least one item.")
+                return pd.DataFrame()
             if not people or orderer == "(add names in data/people.txt)":
                 st.error("Please add/select an orderer in data/people.txt.")
                 return pd.DataFrame()
@@ -319,7 +346,7 @@ with tabs[0]:
             return sorted([e for e in to if e])
 
         def _log_and_email(order_df: pd.DataFrame, do_decrement: bool):
-            # Save screen copy (for the expander)
+            # Save screen copy
             write_last(order_df, orderer)
             # Log
             when_str = append_log(order_df, orderer)
