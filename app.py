@@ -59,67 +59,69 @@ def send_email(order_df, orderer, timestamp):
 st.set_page_config("📦 Supply Order", layout="wide")
 st.title("📦 Supply Ordering")
 
-# Load
+# Load everything
 catalog = load_catalog()
 people = load_people()
 log_df = load_log()
 
-# Persistent qty inputs
+# Set up quantity tracking across reruns
 if "quantities" not in st.session_state:
     st.session_state.quantities = {}
 
-# Orderer
+# Who is placing the order?
 orderer = st.selectbox("Who is placing the order?", people)
 
-# Search
+# Search filter
 search = st.text_input("Search items:")
+catalog["item"] = catalog["item"].astype(str)
 filtered = catalog.copy()
 if search:
     filtered = catalog[catalog["item"].str.contains(search, case=False, na=False)]
 
-# Item list with quantity inputs
-st.subheader("🛒 Select Quantities")
-qty_input = []
+# Quantity input UI
+st.subheader("🛒 Supply List")
+selected_items = []
 for i, row in filtered.iterrows():
-    item_key = f"{row['product_number']}_{i}"
+    key = f"{row['product_number']}_{i}"
     col1, col2 = st.columns([4, 1])
     with col1:
         st.markdown(f"**{row['item']}** — `{row['product_number']}`")
     with col2:
-        qty = st.number_input("Qty", min_value=0, step=1, value=st.session_state.quantities.get(item_key, 0), key=item_key)
+        qty = st.number_input("Qty", min_value=0, step=1, value=st.session_state.quantities.get(key, 0), key=key)
+        st.session_state.quantities[key] = qty
         if qty > 0:
-            st.session_state.quantities[item_key] = qty
-            qty_input.append({
+            selected_items.append({
                 "item": row["item"],
                 "product_number": row["product_number"],
                 "qty": qty
             })
 
-# Submit button
+# Log order
 if st.button("📤 Log and Email Order"):
-    if not qty_input:
-        st.warning("Please enter quantities before logging.")
+    if not selected_items:
+        st.warning("You must select at least one quantity.")
     else:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        order_df = pd.DataFrame(qty_input)
-        order_df["timestamp"] = timestamp
-        order_df["orderer"] = orderer
-        save_log(order_df[["timestamp", "orderer", "item", "product_number", "qty"]])
-        send_email(order_df[["item", "product_number", "qty"]], orderer, timestamp)
+        df = pd.DataFrame(selected_items)
+        df["timestamp"] = timestamp
+        df["orderer"] = orderer
+        save_log(df[["timestamp", "orderer", "item", "product_number", "qty"]])
+        send_email(df[["item", "product_number", "qty"]], orderer, timestamp)
 
-        # Show success + shopping list
-        st.success("Order logged and emailed.")
+        st.success("✅ Order logged and emailed!")
+
+        # Show copy/paste list
         st.subheader("🧾 Copy/Paste Shopping List")
-        lines = [f"{r['item']} — {r['product_number']} — Qty {r['qty']}" for r in qty_input]
-        st.text_area("Shopping List", value="\n".join(lines), height=200)
+        lines = [f"{row['item']} — {row['product_number']} — Qty {row['qty']}" for row in selected_items]
+        st.text_area("List", value="\n".join(lines), height=200)
         st.download_button(
             "⬇️ Download CSV",
-            data=pd.DataFrame(qty_input)[["item", "product_number", "qty"]].to_csv(index=False).encode("utf-8"),
+            data=df[["item", "product_number", "qty"]].to_csv(index=False).encode("utf-8"),
             file_name=f"order_{timestamp.replace(':', '-')}.csv",
             mime="text/csv"
         )
 
-# Order log
+# View past logs
 if not log_df.empty:
     st.divider()
     st.subheader("📜 Past Orders")
