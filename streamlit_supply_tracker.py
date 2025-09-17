@@ -500,4 +500,4 @@ with tab_order:
                             sel = set(to_clear)
                             keep = ~logs.apply(lambda r: f"{r['item']} — {r['product_number']}" in sel, axis=1)
                             new_logs = logs[keep].copy()
-                            new_logs.to_csv(LOG_PATH, index
+                            new_logs.to_csv(LOG_PATH, index)
