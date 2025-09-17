@@ -252,18 +252,18 @@ with tab_catalog:
     cat = read_catalog()
     st.dataframe(cat, use_container_width=True, hide_index=True)
     # Buttons to reload from disk and/or download current catalog
-        col_reload, col_download = st.columns(2)
-        with col_reload:
-            if st.button("🔄 Reload catalog from disk"):
-                st.cache_data.clear()   # clear cached read_catalog()
-                st.rerun()              # re-run so UI picks up changes from data/catalog.csv
-        with col_download:
-            st.download_button(
-                "⬇️ Download catalog.csv",
-                data=cat.to_csv(index=False).encode("utf-8"),
-                file_name="catalog.csv",
-                mime="text/csv",
-            )
+    col_reload, col_download = st.columns(2)
+    with col_reload:
+        if st.button("🔄 Reload catalog from disk"):
+            st.cache_data.clear()   # clear cached read_catalog()
+            st.rerun()              # re-run so UI picks up changes from data/catalog.csv
+    with col_download:
+        st.download_button(
+            "⬇️ Download catalog.csv",
+            data=cat.to_csv(index=False).encode("utf-8"),
+            file_name="catalog.csv",
+            mime="text/csv",
+        )
 
 # Buttons to reload from disk and/or download current catalog
     col_reload, col_download = st.columns(2)
