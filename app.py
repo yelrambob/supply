@@ -27,9 +27,13 @@ def load_people():
     return ["Unknown"]
 
 def load_log():
-    if LOG_PATH.exists():
-        return pd.read_csv(LOG_PATH)
-    return pd.DataFrame(columns=["timestamp", "orderer", "item", "product_number", "qty"])
+    try:
+        df = pd.read_csv(LOG_PATH)
+        if df.empty or "item" not in df.columns:
+            raise ValueError("Log file exists but is empty or malformed.")
+        return df
+    except Exception:
+        return pd.DataFrame(columns=["timestamp", "orderer", "item", "product_number", "qty"])
 
 def save_log(new_entries):
     log = load_log()
