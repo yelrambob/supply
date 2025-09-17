@@ -46,14 +46,26 @@ safe_ensure_file_with_header(LOG_PATH, ORDER_LOG_COLUMNS)
 # ---------- Email helpers ----------
 def get_smtp_config():
     smtp = st.secrets.get("smtp", {})
+    port = int(smtp.get("port", 465))
+    # Respect explicit use_ssl if provided; otherwise infer from port
+    use_ssl_raw = smtp.get("use_ssl", None)
+    if use_ssl_raw is None:
+        use_ssl = (port == 465)
+    else:
+        use_ssl = str(use_ssl_raw).lower() in ("1", "true", "yes")
+
+    mail_from = smtp.get("from") or smtp.get("user") or ""
+    if smtp.get("force_from_user", False) and smtp.get("user"):
+        mail_from = smtp.get("user")
+
     return {
         "host": smtp.get("host"),
-        "port": int(smtp.get("port", 465)),
+        "port": port,
         "user": smtp.get("user"),
         "password": smtp.get("password"),
-        "mail_from": smtp.get("from") or smtp.get("user") or "",
+        "mail_from": mail_from,
         "default_to": smtp.get("to", ""),
-        "use_ssl": int(smtp.get("port", 465)) == 465,
+        "use_ssl": use_ssl,
     }
 
 def send_email_receipt(order_df: pd.DataFrame, orderer: str, when_str: str, recipients_str: str) -> bool:
