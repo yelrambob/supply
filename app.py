@@ -26,12 +26,9 @@ ORDER_LOG_COLUMNS = ["item", "product_number", "qty", "ordered_at", "orderer"]
 
 # ---------- Seed files ----------
 def ensure_seed_files():
-    # If primary catalog is missing/empty, copy default (if present)
     if (not CATALOG_PATH.exists()) or (CATALOG_PATH.stat().st_size == 0):
         if CATALOG_DEFAULT_PATH.exists() and CATALOG_DEFAULT_PATH.stat().st_size > 0:
             copy2(CATALOG_DEFAULT_PATH, CATALOG_PATH)
-
-    # If people file missing/empty, copy default (if present)
     if (not PEOPLE_PATH.exists()) or (PEOPLE_PATH.stat().st_size == 0):
         if PEOPLE_DEFAULT_PATH.exists() and PEOPLE_DEFAULT_PATH.stat().st_size > 0:
             copy2(PEOPLE_DEFAULT_PATH, PEOPLE_PATH)
@@ -41,7 +38,6 @@ def safe_read_csv(path: Path, **kwargs) -> pd.DataFrame:
     if not path.exists() or path.stat().st_size == 0:
         return pd.DataFrame()
     try:
-        # Tolerant parser for messy CSVs (extra commas, etc.)
         return pd.read_csv(
             path,
             encoding="utf-8",
@@ -55,76 +51,82 @@ def safe_read_csv(path: Path, **kwargs) -> pd.DataFrame:
         st.warning(f"Could not read {path.name}: {e}")
         return pd.DataFrame()
 
+def _best_text_col(df: pd.DataFrame, prefer: list[str]) -> str | None:
+    # prefer explicit names if present
+    for p in prefer:
+        if p in df.columns:
+            return p
+    # otherwise choose the column with the most non-empty strings
+    best, best_count = None, -1
+    for c in df.columns:
+        s = df[c]
+        # count “real” values (not NaN/empty/whitespace/"nan")
+        cnt = s.astype(str).str.strip().replace({"nan":"", "NaN":"", "None":""}).ne("").sum()
+        if cnt > best_count:
+            best, best_count = c, cnt
+    return best
+
 @st.cache_data
 def load_catalog() -> pd.DataFrame:
     raw = safe_read_csv(CATALOG_PATH, header=0)
     if raw.empty:
-        # Provide required columns to keep UI stable
         return pd.DataFrame(columns=["item", "product_number", "current_qty", "per_box_qty", "sort_order"])
 
-    # 1) Normalize column names
+    # Normalize headers
     raw.columns = [str(c).strip().lower() for c in raw.columns]
 
-    # 2) Auto-detect item & product number columns for messy files
-    def pick_item_col(df: pd.DataFrame) -> str | None:
-        for preferred in ["item", "items", "name", "description", "desc"]:
-            if preferred in df.columns:
-                return preferred
-        for c in df.columns:
-            # choose first column that has any non-empty values
-            if df[c].astype(str).str.strip().ne("").sum() > 0:
-                return c
-        return None
+    # Drop columns that are entirely empty/NaN
+    raw = raw.dropna(axis=1, how="all")
 
-    def pick_pn_col(df: pd.DataFrame, item_col: str | None) -> str | None:
-        for preferred in ["product_number", "product no", "productno", "sku", "id", "code", "pn"]:
-            if preferred in df.columns and preferred != item_col:
-                return preferred
-        for c in df.columns:
-            if c != item_col and df[c].astype(str).str.strip().ne("").sum() > 0:
-                return c
-        return None
+    # Pick item / product_number columns robustly
+    item_col = _best_text_col(raw, ["item", "items", "name", "description", "desc"])
+    pn_col   = _best_text_col(raw, ["product_number", "product no", "productno", "sku", "id", "code", "pn"])
 
-    item_col = pick_item_col(raw)
-    pn_col = pick_pn_col(raw, item_col)
-
-    if not item_col or not pn_col:
+    if not item_col or not pn_col or item_col == pn_col:
         st.error(
-            "Could not detect `item` and `product_number` columns in data/catalog.csv. "
-            "Ensure your file has at least two columns: item name and product number."
+            "Could not reliably detect `item` and `product_number` in data/catalog.csv.\n"
+            "Ensure at least two columns exist: one for item names and one for product numbers."
         )
         return pd.DataFrame(columns=["item", "product_number", "current_qty", "per_box_qty", "sort_order"])
 
-    # 3) Build normalized catalog
+    def clean_series(s: pd.Series) -> pd.Series:
+        # Preserve NaN as empty strings (not the literal "nan")
+        s = s.astype(object).where(pd.notnull(s), "")
+        s = s.apply(lambda x: x if isinstance(x, str) else str(x))
+        s = s.str.strip().replace({"nan":"", "NaN":"", "None":""})
+        return s
+
     out = pd.DataFrame({
-        "item": raw[item_col].astype(str).str.strip(),
-        "product_number": raw[pn_col].astype(str).str.strip(),
+        "item": clean_series(raw[item_col]),
+        "product_number": clean_series(raw[pn_col]),
     })
 
-    # Optional columns if present
+    # Optional columns
     for opt in ["current_qty", "per_box_qty", "sort_order"]:
         if opt in raw.columns:
             out[opt] = raw[opt]
         else:
             out[opt] = None
 
-    # 4) Drop rows with blank item or product_number
+    # Remove rows without essential fields
     out = out[(out["item"] != "") & (out["product_number"] != "")]
     if out.empty:
         st.error("`catalog.csv` loaded but has no usable rows after cleanup (blank item names or product numbers).")
         return pd.DataFrame(columns=["item", "product_number", "current_qty", "per_box_qty", "sort_order"])
 
-    # 5) Sort for stable display
+    # Coerce sort_order for stable sort
     out["sort_order"] = pd.to_numeric(out["sort_order"], errors="coerce")
     out = out.sort_values(by=["sort_order", "item"], ascending=[True, True], na_position="last").reset_index(drop=True)
+
+    # Ensure product_number is string
+    out["product_number"] = clean_series(out["product_number"])
     return out[["item", "product_number", "current_qty", "per_box_qty", "sort_order"]]
 
 def load_people(path: Path) -> list:
     if not path.exists() or path.stat().st_size == 0:
         return []
     try:
-        names = [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
-        return names
+        return [ln.strip() for ln in path.read_text(encoding="utf-8").splitlines() if ln.strip()]
     except Exception as e:
         st.warning(f"Could not read people file: {e}")
         return []
@@ -176,9 +178,6 @@ def email_enabled() -> bool:
         return False
 
 def send_email(subject: str, body_text: str, to_emails: list, attachments: list = None):
-    """
-    attachments: list of tuples (filename, bytes, mimetype)
-    """
     s = st.secrets["smtp"]
     context = ssl.create_default_context()
     msg = EmailMessage()
@@ -243,6 +242,7 @@ else:
 # ---------- Current Cart (Top) ----------
 def current_cart_rows():
     rows = []
+    # Use full catalog so items not in view still count
     for _, r in catalog.iterrows():
         pn = str(r["product_number"])
         q = int(st.session_state["qty"].get(pn, 0) or 0)
@@ -272,7 +272,7 @@ with h2: st.markdown("**Current**")
 with h3: st.markdown("**Per Box**")
 with h4: st.markdown("**Order Qty**")
 
-def render_row(row):
+def render_row(row, i: int):
     pn = str(row["product_number"])
     item_name = str(row["item"])
 
@@ -289,20 +289,26 @@ def render_row(row):
         st.write("" if pd.isna(val) else str(val))
         st.caption("Per Box")
     with col4:
-        key = f"qty_{pn}"
-        # initialize from central qty store
-        if key not in st.session_state:
-            st.session_state[key] = int(st.session_state["qty"].get(pn, 0) or 0)
-        new_val = st.number_input("Order Qty", key=key, min_value=0, step=1, label_visibility="collapsed")
+        # Unique widget key per row to avoid DuplicateElementKey,
+        # but keep central state per product_number.
+        widget_key = f"qty_{pn}_{i}"
+        if widget_key not in st.session_state:
+            # initialize widget from central qty store
+            st.session_state[widget_key] = int(st.session_state["qty"].get(pn, 0) or 0)
+        new_val = st.number_input("Order Qty", key=widget_key, min_value=0, step=1, label_visibility="collapsed")
         st.session_state["qty"][pn] = int(new_val or 0)
 
-for _, row in view.iterrows():
+for i, (_, row) in enumerate(view.iterrows()):
     with st.container(border=True):
-        render_row(row)
+        render_row(row, i)
 
 st.divider()
 
 # ---------- Log & Email ----------
+def email_enabled_hint(enabled: bool):
+    if not enabled:
+        st.caption("Email disabled—configure `.streamlit/secrets.toml` with [smtp] to enable.")
+
 email_ok = email_enabled()
 recipients_df = emails_df.copy()
 recipient_list = recipients_df["email"].tolist() if not recipients_df.empty else []
@@ -314,6 +320,8 @@ with colA:
                                help="Uses SMTP settings from secrets.toml under [smtp]")
 with colB:
     cc_orderer = st.checkbox("CC the orderer if found in emails.csv", value=True)
+
+email_enabled_hint(email_ok)
 
 log_btn = st.button("✅ Log Order (and Email)")
 
@@ -383,9 +391,13 @@ if log_btn:
         for _, r in catalog.iterrows():
             pn = str(r["product_number"])
             st.session_state["qty"][pn] = 0
-            k = f"qty_{pn}"
-            if k in st.session_state:
-                st.session_state[k] = 0
+            # clear any widget keys for this pn (optional, harmless if left)
+        # Clear visible widgets in the current view so the UI resets
+        for i, (_, r) in enumerate(view.iterrows()):
+            pn = str(r["product_number"])
+            wkey = f"qty_{pn}_{i}"
+            if wkey in st.session_state:
+                st.session_state[wkey] = 0
 
         cart_holder.info("Cart cleared after logging. Add new quantities to create another order.")
         order_log = load_order_log()
