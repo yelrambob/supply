@@ -15,7 +15,7 @@ LOG_PATH = DATA_DIR / "order_log.csv"
 @st.cache_data
 def load_catalog():
     df = pd.read_csv(CATALOG_PATH)
-    df = df.dropna(subset=["item", "product_number"])
+    df = df[["item", "product_number"]].dropna()
     df["item"] = df["item"].astype(str)
     df["product_number"] = df["product_number"].astype(str)
     return df.reset_index(drop=True)
@@ -27,20 +27,21 @@ def load_people():
     return ["Unknown"]
 
 def load_log():
+    if not LOG_PATH.exists():
+        return pd.DataFrame(columns=["timestamp", "orderer", "item", "product_number", "qty"])
     try:
         df = pd.read_csv(LOG_PATH)
         if df.empty or "item" not in df.columns:
-            raise ValueError("Log file exists but is empty or malformed.")
+            raise ValueError
         return df
     except Exception:
         return pd.DataFrame(columns=["timestamp", "orderer", "item", "product_number", "qty"])
 
-def save_log(new_entries):
+def save_log(df):
     log = load_log()
-    combined = pd.concat([log, new_entries], ignore_index=True)
+    combined = pd.concat([log, df], ignore_index=True)
     combined.to_csv(LOG_PATH, index=False)
 
-# ---------- Email ----------
 def send_email(order_df, orderer, timestamp):
     config = st.secrets["smtp"]
     msg = EmailMessage()
@@ -63,65 +64,51 @@ def send_email(order_df, orderer, timestamp):
 st.set_page_config("📦 Supply Order", layout="wide")
 st.title("📦 Supply Ordering")
 
-# Load
 catalog = load_catalog()
 people = load_people()
 log_df = load_log()
 
-# Session state for quantities
+# Init session state
 if "quantities" not in st.session_state:
     st.session_state.quantities = {}
 
-# Select who is ordering
+# Who is ordering
 orderer = st.selectbox("Who is placing the order?", people)
 
-# Search filter
+# Search
 search = st.text_input("Search items:")
-catalog["item"] = catalog["item"].astype(str)
 filtered = catalog.copy()
 if search:
-    filtered = catalog[catalog["item"].str.contains(search, case=False, na=False)]
+    filtered = filtered[filtered["item"].str.contains(search, case=False, na=False)]
 
-# Ensure log_df exists and has expected columns
-if log_df.empty or "timestamp" not in log_df.columns:
-    latest_log = pd.DataFrame(columns=["item", "product_number", "last_ordered_at", "last_orderer"])
-else:
+# Get latest order info
+if not log_df.empty:
     log_df["timestamp"] = pd.to_datetime(log_df["timestamp"], errors="coerce")
-    latest_log = (
-        log_df.sort_values("timestamp")
-        .dropna(subset=["item", "product_number"])
+    latest = (
+        log_df.dropna(subset=["item", "product_number"])
+        .sort_values("timestamp")
         .groupby(["item", "product_number"])
         .last()
         .reset_index()
-        .rename(columns={
-            "timestamp": "last_ordered_at",
-            "orderer": "last_orderer"
-        })
+        .rename(columns={"timestamp": "last_ordered_at", "orderer": "last_orderer"})
     )
+else:
+    latest = pd.DataFrame(columns=["item", "product_number", "last_ordered_at", "last_orderer"])
 
-# Merge into catalog — not filtered!
-merged = pd.merge(catalog, latest_log, on=["item", "product_number"], how="left")
+# Merge
+merged = pd.merge(filtered, latest, on=["item", "product_number"], how="left")
 merged["last_ordered_at"] = pd.to_datetime(merged["last_ordered_at"], errors="coerce")
-
-# Sort but preserve all rows
 merged = merged.sort_values("last_ordered_at", ascending=False, na_position="last")
-
-# Merge into filtered catalog
-merged = pd.merge(filtered, latest_log, on=["item", "product_number"], how="left")
-merged["last_ordered_at"] = pd.to_datetime(merged["last_ordered_at"], errors="coerce")
-
-# Sort by most recent
-merged = merged.sort_values("last_ordered_at", ascending=False, na_position="last")
-
-# Add qty column for editing
 merged["qty"] = 0
+
+# Apply previous qtys
 for i, row in merged.iterrows():
     key = f"{row['product_number']}_{i}"
     if key in st.session_state.quantities:
         merged.at[i, "qty"] = st.session_state.quantities[key]
 
-# Editable table
-st.subheader("🧾 Scrollable Supply Table (Editable)")
+# Table UI
+st.subheader("🧾 Supply Table")
 edited = st.data_editor(
     merged[["qty", "item", "product_number", "last_ordered_at", "last_orderer"]],
     use_container_width=True,
@@ -134,23 +121,22 @@ edited = st.data_editor(
         "last_ordered_at": st.column_config.DatetimeColumn("Last Ordered", format="YYYY-MM-DD HH:mm", disabled=True),
         "last_orderer": st.column_config.TextColumn("Ordered By", disabled=True)
     },
-    key="order_editor_table"
+    key="order_editor"
 )
 
-# Store updated quantities in session state
+# Track selections
 selected_items = []
 for i, row in edited.iterrows():
     key = f"{row['product_number']}_{i}"
-    qty = row["qty"]
-    st.session_state.quantities[key] = qty
-    if qty > 0:
+    st.session_state.quantities[key] = row["qty"]
+    if row["qty"] > 0:
         selected_items.append({
             "item": row["item"],
             "product_number": row["product_number"],
-            "qty": qty
+            "qty": row["qty"]
         })
 
-# Submit order
+# Log order
 if st.button("📤 Log and Email Order"):
     if not selected_items:
         st.warning("Please select at least one item with Qty > 0.")
@@ -174,11 +160,8 @@ if st.button("📤 Log and Email Order"):
             mime="text/csv"
         )
 
-# View full order log
+# Show logs
 if not log_df.empty:
     st.divider()
     st.subheader("📜 Past Orders")
     st.dataframe(log_df.sort_values("timestamp", ascending=False), use_container_width=True)
-
-st.write("Merged item count:", len(merged))
-st.dataframe(merged.head())
