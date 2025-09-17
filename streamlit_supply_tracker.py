@@ -4,8 +4,6 @@ import io
 from datetime import datetime
 from pathlib import Path
 from pandas.errors import EmptyDataError
-import smtplib, ssl
-from email.message import EmailMessage
 
 st.set_page_config(page_title="Supply Tracker", page_icon="📦", layout="wide")
 
@@ -65,7 +63,7 @@ def clean_catalog(df: pd.DataFrame) -> pd.DataFrame:
             if numeric_like >= max(5, len(series) * 0.1):
                 chosen_prod_idx = idx
                 break
-        name_series = df.iloc[:, i].astype(str).str.strip()
+        name_series = df.iloc[:, i].astype(str).str.trim() if hasattr(str, "trim") else df.iloc[:, i].astype(str).str.strip()
         if chosen_prod_idx is not None:
             prod_series = pd.to_numeric(df.iloc[:, chosen_prod_idx], errors="coerce")
             for name, prod in zip(name_series, prod_series):
@@ -144,45 +142,36 @@ def write_catalog(df: pd.DataFrame):
     df["sort_order"] = so.fillna(pd.Series(range(len(df)), index=df.index)).astype(int)
     df.to_csv(CATALOG_PATH, index=False)
 
+# APPEND (no overwrite) + DEDUPE
 def append_log(order_df: pd.DataFrame, orderer: str):
     """
     Append new rows to order_log.csv and drop exact duplicates.
-    A duplicate = same (item, product_number, qty, ordered_at, orderer).
+    Duplicate definition: same (item, product_number, qty, ordered_at, orderer).
     """
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    # New rows (one per line item ordered)
     df = order_df.copy()
     df["ordered_at"] = now
     df["orderer"] = orderer
     df["qty"] = pd.to_numeric(df["qty"], errors="coerce").fillna(0).astype(int)
 
-    # Enforce column order/schema
-    expected = ["item", "product_number", "qty", "ordered_at", "orderer"]
+    expected = ORDER_LOG_COLUMNS
     df = df[expected]
 
-    # Load existing log (if any)
     prev = safe_read_csv(LOG_PATH)
     if not prev.empty:
-        # Make sure it has the expected columns
         for c in expected:
             if c not in prev.columns:
                 prev[c] = pd.NA
         prev = prev[expected]
-
-        # Append + de-duplicate (exact row duplicates only)
         combined = pd.concat([prev, df], ignore_index=True)
-        # Normalize dtypes before dedupe (helps avoid false mismatches)
         combined["qty"] = pd.to_numeric(combined["qty"], errors="coerce").fillna(0).astype(int)
         combined["product_number"] = pd.to_numeric(combined["product_number"], errors="coerce").astype("Int64")
         combined.drop_duplicates(subset=expected, keep="first", inplace=True)
     else:
         combined = df
 
-    # Persist (keeps all old rows + new uniques)
     combined.to_csv(LOG_PATH, index=False)
     return now
-
 
 def load_last_order() -> pd.DataFrame:
     df = safe_read_csv(LAST_ORDER_PATH)
@@ -205,6 +194,10 @@ def save_last_order(df: pd.DataFrame, orderer: str):
         st.warning(f"Couldn't persist last order: {e}")
 
 def last_order_info_map() -> pd.DataFrame:
+    """
+    Compute latest ordered_at and qty per (item, product_number) from the log.
+    This powers the 'Last ordered' and 'Last qty' columns in the UI.
+    """
     logs = safe_read_csv(LOG_PATH)
     needed = ["item", "product_number", "qty", "ordered_at"]
     if logs.empty or not all(c in logs.columns for c in needed):
@@ -219,60 +212,6 @@ def last_order_info_map() -> pd.DataFrame:
     return idx[["item", "product_number", "ordered_at", "qty"]].rename(
         columns={"ordered_at": "last_ordered_at", "qty": "last_qty"}
     )
-
-# ---------- Email ----------
-def get_smtp_config():
-    smtp = st.secrets.get("smtp", {})
-    return {
-        "host": smtp.get("host"),
-        "port": int(smtp.get("port", 465)),
-        "user": smtp.get("user"),
-        "password": smtp.get("password"),
-        "mail_from": smtp.get("from", smtp.get("user")),
-        "default_to": smtp.get("to", ""),
-        "use_ssl": int(smtp.get("port", 465)) == 465,
-    }
-
-def send_email(order_df: pd.DataFrame, orderer: str, recipients_str: str) -> bool:
-    cfg = get_smtp_config()
-    if not cfg["host"]:
-        st.warning("Email not sent: SMTP is not configured in Streamlit secrets.")
-        return False
-    recipients = [r.strip() for r in recipients_str.split(",") if r.strip()]
-    if not recipients:
-        st.warning("Email not sent: No recipients provided.")
-        return False
-
-    subject = f"Supply Order — {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} — {orderer}"
-    lines = [f"{r['item']} — {r['product_number']} — Qty {r['qty']}" for _, r in order_df.iterrows()]
-    body = "Order details:\n\n" + "\n".join(lines)
-
-    msg = EmailMessage()
-    msg["Subject"] = subject
-    msg["From"] = cfg["mail_from"]
-    msg["To"] = ", ".join(recipients)
-    msg.set_content(body)
-
-    csv_bytes = order_df.to_csv(index=False).encode("utf-8")
-    msg.add_attachment(csv_bytes, maintype="text", subtype="csv", filename="order.csv")
-
-    try:
-        if cfg["use_ssl"]:
-            with smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=ssl.create_default_context()) as s:
-                if cfg["user"] and cfg["password"]:
-                    s.login(cfg["user"], cfg["password"])
-                s.send_message(msg)
-        else:
-            with smtplib.SMTP(cfg["host"], cfg["port"]) as s:
-                s.ehlo()
-                s.starttls(context=ssl.create_default_context())
-                if cfg["user"] and cfg["password"]:
-                    s.login(cfg["user"], cfg["password"])
-                s.send_message(msg)
-        return True
-    except Exception as e:
-        st.error(f"Email failed: {e}")
-        return False
 
 # ---------- Sidebar: Setup & People ----------
 st.sidebar.header("Setup")
@@ -381,7 +320,7 @@ with tab_order:
     if cat.empty:
         st.info("No catalog yet. Initialize it from the sidebar.")
     else:
-        # Last generated order (now includes date & user)
+        # Last generated order (includes date & user)
         last_order_df = load_last_order()
         if not last_order_df.empty:
             st.markdown("**Last generated order (persists across sessions):**")
@@ -423,27 +362,24 @@ with tab_order:
         if search:
             table = table[table["item"].str.contains(search, case=False, na=False)]
 
-        # Prepare UI columns
+        # Prepare UI columns (NO checkbox; just a Qty column)
         table["last_qty"] = pd.to_numeric(table.get("last_qty"), errors="coerce")
-        table["select"] = False
         table["qty"] = 0
 
-        # Prefill from persisted last order (qty + selection)
+        # Prefill qty from last generated order (optional convenience)
         if not last_order_df.empty:
             prev_map = {(r["item"], str(r["product_number"])): int(r["qty"]) for _, r in last_order_df.iterrows()}
             for i, r in table.iterrows():
                 key = (r["item"], str(r["product_number"]))
                 if key in prev_map:
-                    table.at[i, "select"] = True
                     table.at[i, "qty"] = int(prev_map[key])
 
-        show_cols = ["select", "qty", "item", "product_number", "last_ordered_at", "last_qty"]
+        show_cols = ["qty", "item", "product_number", "last_ordered_at", "last_qty"]
         edited = st.data_editor(
             table[show_cols],
             use_container_width=True,
             hide_index=True,
             column_config={
-                "select": st.column_config.CheckboxColumn("Select"),
                 "qty": st.column_config.NumberColumn("Qty", min_value=0, step=1),
                 "item": st.column_config.TextColumn("Item", disabled=True),
                 "product_number": st.column_config.TextColumn("Product #", disabled=True),
@@ -452,18 +388,13 @@ with tab_order:
             },
         )
 
-        # Options that affect the single-click action
         dec_inventory = st.checkbox("Decrement inventory by ordered qty")
-        smtp_cfg = get_smtp_config()
-        default_to = smtp_cfg["default_to"] or ""
-        send_email_opt = st.checkbox("Send email receipt")
-        email_to = st.text_input("Email to (comma-separated)", value=default_to if send_email_opt else "", disabled=not send_email_opt)
 
-        # SINGLE BUTTON: Generate, Log (and optionally email + decrement)
+        # SINGLE BUTTON: Generate & Log (no separate checkbox column)
         if st.button("🧾 Generate & Log Order"):
-            chosen = edited[(edited["select"]) & (edited["qty"] > 0)].copy()
+            chosen = edited[edited["qty"] > 0].copy()
             if chosen.empty:
-                st.error("Please check items and set Qty > 0.")
+                st.error("Please set Qty > 0 for at least one item.")
             elif not people or orderer == "(add names in sidebar)":
                 st.error("Please add/select an orderer in the sidebar first.")
             else:
@@ -473,13 +404,13 @@ with tab_order:
                 st.success("Order generated and logged.")
                 st.dataframe(order_df, use_container_width=True, hide_index=True)
 
-                # Persist for next session w/ date & user
+                # Persist for next session (who & when generated)
                 save_last_order(order_df, orderer=orderer)
 
-                # Log to CSV with timestamp & orderer
+                # Append to log (no overwrite; no duplicates)
                 now = append_log(order_df, orderer)
 
-                # Decrement inventory if chosen
+                # Optional: decrement inventory
                 if dec_inventory:
                     cat2 = cat.copy()
                     for _, r in order_df.iterrows():
@@ -487,12 +418,6 @@ with tab_order:
                         cat2.loc[idx, "current_qty"] = max(0, int(cat2.loc[idx, "current_qty"]) - int(r["qty"]))
                     write_catalog(cat2)
                     st.info("Inventory updated.")
-
-                # Email if chosen and configured
-                if send_email_opt:
-                    ok = send_email(order_df, orderer, email_to)
-                    if ok:
-                        st.success("Email sent.")
 
                 # Download helper & copy-paste block
                 csv_bytes = order_df.to_csv(index=False).encode("utf-8")
@@ -505,11 +430,11 @@ with tab_order:
                 txt_lines = [f"{r['item']} — {r['product_number']} — Qty {r['qty']}" for _, r in order_df.iterrows()]
                 st.text_area("Copy-paste for your other system", value="\n".join(txt_lines), height=150)
 
-        # Tools
+        # Tools in Order tab
         with st.expander("Tools"):
-            if st.button("Clear last generated order"):
+            if st.button("Clear last generated order (screen state)"):
                 pd.DataFrame(columns=LAST_ORDER_COLUMNS).to_csv(LAST_ORDER_PATH, index=False)
-                st.success("Cleared last order list.")
+                st.success("Cleared last generated order list.")
 
 # --- Logs tab ---
 with tab_logs:
@@ -523,5 +448,29 @@ with tab_logs:
             file_name="order_log.csv",
             mime="text/csv",
         )
+
+        st.markdown("### Clear 'Last ordered' history")
+        # Build choices per (item, product_number)
+        pairs = logs[["item", "product_number"]].drop_duplicates().sort_values(["item", "product_number"])
+        pairs["label"] = pairs.apply(lambda r: f"{r['item']} — {r['product_number']}", axis=1)
+        to_clear = st.multiselect("Select items to clear from history", pairs["label"].tolist())
+
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("🧹 Clear selected"):
+                if to_clear:
+                    sel = set(to_clear)
+                    keep = ~logs.apply(lambda r: f"{r['item']} — {r['product_number']}" in sel, axis=1)
+                    new_logs = logs[keep].copy()
+                    new_logs.to_csv(LOG_PATH, index=False)
+                    st.success(f"Cleared {len(logs) - len(new_logs)} log rows for selected items.")
+                    st.experimental_rerun()
+                else:
+                    st.info("No items selected.")
+        with col2:
+            if st.button("🗑️ Clear ALL history"):
+                pd.DataFrame(columns=ORDER_LOG_COLUMNS).to_csv(LOG_PATH, index=False)
+                st.success("Cleared entire order history.")
+                st.experimental_rerun()
     else:
         st.info("No orders logged yet.")
