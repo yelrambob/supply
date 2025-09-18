@@ -55,7 +55,7 @@ def send_email(subject: str, body: str, to_emails: list[str]):
     prefix = s.get("subject_prefix", "")
     msg["Subject"] = f"{prefix}{subject}" if prefix else subject
 
-    # Use a valid email for From; fall back to username if needed
+    # From must be an email; fallback to username
     from_header = s.get("from") or s.get("username")
     if "@" not in str(from_header):
         from_header = s.get("username")
@@ -103,7 +103,6 @@ def read_catalog() -> pd.DataFrame:
     df = safe_read_csv(CATALOG_PATH)
     if df.empty:
         return pd.DataFrame(columns=["item", "product_number", "current_qty", "sort_order"])
-    # normalize
     for c in ["item", "product_number", "current_qty", "sort_order"]:
         if c not in df.columns:
             df[c] = pd.NA
@@ -211,7 +210,11 @@ catalog = read_catalog()
 logs = read_log()
 last_order_df = read_last()
 
-st.caption(f"Loaded {len(catalog)} catalog rows • {len(logs)} log rows • Email configured: {'✅' if smtp_ok() else '❌'}")
+st.caption(
+    f"Loaded {len(catalog)} catalog rows • {len(logs)} log rows • "
+    f"Email configured: {'✅' if smtp_ok() else '❌'} • Recipients in emails.csv: "
+    f"{0 if emails_df.empty else len(emails_df)}"
+)
 
 tabs = st.tabs(["Create Order", "Adjust Inventory", "Catalog", "Order Logs", "Tools"])
 
@@ -223,7 +226,7 @@ with tabs[0]:
             st.info("No previous order.")
         else:
             lines = [f"{r['item']} — {r['product_number']} — Qty {r['qty']}" for _, r in last_order_df.iterrows()]
-            meta = f"Generated at {last_order_df['generated_at'].iloc[0]} by {last_order_df["orderer"].iloc[0]}"
+            meta = f"Generated at {last_order_df['generated_at'].iloc[0]} by {last_order_df['orderer'].iloc[0]}"
             st.text_area("Copy/paste", value="\n".join(lines), height=160, key="order_copy_area")
             st.caption(meta)
             st.download_button(
@@ -302,6 +305,9 @@ with tabs[0]:
 
         table = table.copy()
         table["qty"] = table.apply(get_qty, axis=1)
+
+        # >>> IMPORTANT: reset index before passing to data_editor to avoid "disappearing" edits
+        table = table.reset_index(drop=True)
 
         show_cols = ["qty", "item", "product_number", "last_ordered_at", "last_qty", "last_orderer"]
         edited = st.data_editor(
@@ -413,7 +419,7 @@ with tabs[1]:
         st.info("No catalog found.")
     else:
         st.write("Adjust `current_qty` or `sort_order`, then save.")
-        editable = catalog.copy()
+        editable = catalog.copy().reset_index(drop=True)
         edited = st.data_editor(
             editable,
             use_container_width=True,
@@ -504,15 +510,33 @@ with tabs[4]:
 
     confirm = st.checkbox("I understand this action cannot be undone.", key="clear_confirm")
 
-    if st.button("🧨 Clear ALL selected info", type="primary", disabled=not confirm, key="btn_clear_all"):
-        try:
-            if opt_qty:
-                st.session_state["qty_map"] = {}
-            if opt_last:
-                pd.DataFrame(columns=LAST_ORDER_COLUMNS).to_csv(LAST_PATH, index=False)
-            if opt_logs:
-                pd.DataFrame(columns=ORDER_LOG_COLUMNS).to_csv(LOG_PATH, index=False)
-            st.success("Selected data cleared.")
-            st.rerun()
-        except Exception as e:
-            st.error(f"Clear failed: {e}")
+    c1, c2 = st.columns([2, 1])
+    with c1:
+        if st.button("🧨 Clear ALL selected info", type="primary", disabled=not confirm, key="btn_clear_all"):
+            try:
+                if opt_qty:
+                    st.session_state["qty_map"] = {}
+                if opt_last:
+                    pd.DataFrame(columns=LAST_ORDER_COLUMNS).to_csv(LAST_PATH, index=False)
+                if opt_logs:
+                    pd.DataFrame(columns=ORDER_LOG_COLUMNS).to_csv(LOG_PATH, index=False)
+                st.success("Selected data cleared.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Clear failed: {e}")
+    with c2:
+        st.markdown("### ")
+        if st.button("✉️ Send test email to yourself", key="btn_test_email", disabled=not smtp_ok()):
+            try:
+                me = st.secrets["smtp"].get("username") or st.secrets["smtp"].get("from")
+                if not me or "@" not in me:
+                    st.error("Your SMTP 'username'/'from' must be a valid email.")
+                else:
+                    send_email(
+                        subject="Test — Supply App",
+                        body="This is a test email from your Streamlit supply app.",
+                        to_emails=[me],
+                    )
+                    st.success(f"Test email sent to {me}.")
+            except Exception as e:
+                st.error(f"Test email failed: {e}")
