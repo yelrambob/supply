@@ -204,8 +204,6 @@ def last_info_map() -> pd.DataFrame:
     logs = logs.sort_values("ordered_at")
     tail = logs.groupby(["item","product_number"], as_index=False).tail(1)
     tail = tail.rename(columns={"ordered_at":"last_ordered_at","qty":"last_qty","orderer":"last_orderer"})
-    tail["item"] = tail["item"].astype(str)
-    tail["product_number"] = tail["product_number"].astype(str)
     return tail[["item","product_number","last_ordered_at","last_qty","last_orderer"]]
 
 # ---------------- Emails CSV ----------------
@@ -226,16 +224,10 @@ def read_emails() -> pd.DataFrame:
     if "email" in df.columns:
         name_col = "name" if "name" in df.columns else None
         for _, r in df.iterrows():
-            raw_email = r.get("email", "")
-            email = extract_email(raw_email)
-            if not email:
-                continue
-            name = str(r.get(name_col, "")).strip() if name_col else ""
-            if not name:
-                raw = str(raw_email)
-                if "<" in raw and ">" in raw:
-                    name = raw.split("<", 1)[0].strip().strip(",")
-            out_rows.append({"name": name, "email": email})
+            email = extract_email(r.get("email", ""))
+            if email:
+                name = str(r.get(name_col, "")).strip() if name_col else ""
+                out_rows.append({"name": name, "email": email})
     else:
         first_col = df.columns[0]
         for _, r in df.iterrows():
@@ -244,16 +236,9 @@ def read_emails() -> pd.DataFrame:
             for p in parts:
                 email = extract_email(p)
                 if email:
-                    name = ""
-                    if "<" in p and ">" in p:
-                        name = p.split("<", 1)[0].strip().strip(",")
-                    out_rows.append({"name": name, "email": email})
+                    out_rows.append({"name": "", "email": email})
 
     out = pd.DataFrame(out_rows)
-    if out.empty:
-        return pd.DataFrame(columns=["name", "email"])
-    out["email"] = out["email"].astype(str).str.strip()
-    out["name"] = out["name"].astype(str).str.strip()
     return out.drop_duplicates(subset=["email"]).reset_index(drop=True)
 
 def all_recipients(emails_df: pd.DataFrame) -> list[str]:
@@ -285,52 +270,35 @@ st.caption(
     f"{0 if emails_df.empty else len(emails_df)}"
 )
 
-# Debug info
 with st.sidebar:
-    st.write("SMTP config loaded:", get_smtp_config())
+    st.write("SMTP config:", get_smtp_config())
 
 tabs = st.tabs(["Create Order", "Adjust Inventory", "Catalog", "Order Logs", "Tools"])
 
 # ---------- Create Order ----------
 with tabs[0]:
-    # last order expander (unchanged) ...
-
     if not catalog.empty:
         c1, c2, c3 = st.columns([2, 2, 3])
         with c1:
-            orderer = st.selectbox(
-                "Who is ordering?",
-                options=(people if people else ["(add names in data/people.txt)"]),
-                index=0,
-                key="order_orderer",
-            )
+            orderer = st.selectbox("Who is ordering?", people or ["(add names in people.txt)"], key="orderer")
         with c2:
             search = st.text_input("Search items", key="order_search")
         with c3:
-            if st.button("🧼 Clear quantities", use_container_width=True, key="btn_clear_qty"):
+            if st.button("🧼 Clear quantities", use_container_width=True):
                 st.session_state["qty_map"] = {}
                 st.session_state["editor_key"] += 1
-                st.success("Cleared all quantities.")
                 st.rerun()
 
-        # build table (unchanged until editor)
-        last_map = last_info_map()
-        table = catalog.merge(last_map, on=["item","product_number"], how="left")
-        table["last_ordered_at"] = pd.to_datetime(table.get("last_ordered_at"), errors="coerce")
-
+        table = catalog.merge(last_info_map(), on=["item","product_number"], how="left")
         qty_map = st.session_state["qty_map"]
-        def get_qty(row) -> int:
-            return int(qty_map.get(qkey(row["item"], row["product_number"]), 0))
-        table = table.copy()
-        table["qty"] = table.apply(get_qty, axis=1).astype(int)
+        table["qty"] = table.apply(lambda r: qty_map.get(qkey(r["item"], r["product_number"]), 0), axis=1)
 
-        show_cols = ["qty","item","product_number","last_ordered_at","last_qty","last_orderer"]
         edited = st.data_editor(
-            table[show_cols],
+            table[["qty","item","product_number","last_ordered_at","last_qty","last_orderer"]],
             use_container_width=True,
             hide_index=True,
             num_rows="dynamic",
-            key=f"order_editor_{st.session_state['editor_key']}",
+            key=f"editor_{st.session_state['editor_key']}",
             column_config={
                 "qty": st.column_config.NumberColumn("Qty", min_value=0, step=1),
                 "item": st.column_config.TextColumn("Item", disabled=True),
@@ -344,29 +312,52 @@ with tabs[0]:
         for _, r in edited.iterrows():
             st.session_state["qty_map"][qkey(r["item"], r["product_number"])] = int(r["qty"])
 
-        def _log_and_email(order_df: pd.DataFrame, do_decrement: bool):
-            write_last(order_df, orderer)
+        def _log_and_email(order_df: pd.DataFrame):
             when_str = append_log(order_df, orderer)
-            if do_decrement:
-                cat2 = catalog.copy()
-                for _, r in order_df.iterrows():
-                    mask = (cat2["item"]==r["item"]) & (cat2["product_number"]==r["product_number"])
-                    cat2.loc[mask,"current_qty"] = (cat2.loc[mask,"current_qty"] - int(r["qty"])).clip(lower=0)
-                write_catalog(cat2)
-            recipients = all_recipients(emails_df)
-            if smtp_ok() and recipients:
+            write_last(order_df, orderer)
+            recips = all_recipients(emails_df)
+            if smtp_ok() and recips:
                 lines = [f"- {r['item']} (#{r['product_number']}): {r['qty']}" for _, r in order_df.iterrows()]
-                body = "\n".join([
-                    f"New supply order logged at {when_str}",
-                    f"Ordered by: {orderer}",
-                    "",
-                    "Items:", *lines
-                ])
-                try:
-                    send_email("Supply Order Logged", body, recipients)
-                    st.success(f"Emailed {len(recipients)} recipient(s).")
-                except Exception as e:
-                    st.error(f"Email failed: {e}")
+                body = f"New order at {when_str} by {orderer}\n\n" + "\n".join(lines)
+                send_email("Supply Order Logged", body, recips)
+                st.success(f"Emailed {len(recips)} recipient(s).")
             st.session_state["qty_map"] = {}
             st.session_state["editor_key"] += 1
             st.rerun()
+
+        if st.button("🧾 Log Order", use_container_width=True):
+            rows = [{"item": i.split("||")[0], "product_number": i.split("||")[1], "qty": q}
+                    for i, q in st.session_state["qty_map"].items() if q > 0]
+            if rows:
+                _log_and_email(pd.DataFrame(rows))
+
+# ---------- Adjust Inventory ----------
+with tabs[1]:
+    if not catalog.empty:
+        edited = st.data_editor(
+            catalog,
+            use_container_width=True,
+            hide_index=True,
+            key="inv_editor",
+        )
+        if st.button("💾 Save inventory"):
+            write_catalog(edited)
+            st.success("Inventory saved.")
+
+# ---------- Catalog ----------
+with tabs[2]:
+    st.dataframe(catalog, use_container_width=True, hide_index=True)
+
+# ---------- Order Logs ----------
+with tabs[3]:
+    st.dataframe(logs, use_container_width=True, hide_index=True)
+
+# ---------- Tools ----------
+with tabs[4]:
+    if st.button("✉️ Test Email"):
+        recips = all_recipients(emails_df)
+        if smtp_ok() and recips:
+            send_email("Test — Supply App", "This is a test.", recips)
+            st.success("Test email sent.")
+        else:
+            st.error("SMTP not configured or no recipients.")
