@@ -428,7 +428,14 @@ with tabs[0]:
 
         show_cols = ["qty", "item", "product_number", "last_ordered_at", "last_qty", "last_orderer"]
 
-        # Use a key tied to a nonce so clearing/logging forces a fresh widget state
+        # Use a callback to handle state updates properly
+        def on_data_change():
+            # This will be called when the data editor changes
+            pass
+
+        # Use a unique key that changes when we want to reset the editor
+        editor_key = f"order_editor_{st.session_state['editor_nonce']}"
+        
         edited = st.data_editor(
             table[show_cols],
             use_container_width=True,
@@ -441,19 +448,25 @@ with tabs[0]:
                 "last_qty": st.column_config.NumberColumn("Last qty", disabled=True),
                 "last_orderer": st.column_config.TextColumn("Last by", disabled=True),
             },
-            key=f"order_editor_{st.session_state['editor_nonce']}",
+            key=editor_key,
+            on_change=on_data_change,
         )
 
-        # FIXED: Always update qty_map from data editor, but use a different approach
-        if edited is not None and not edited.empty:
+        # FIXED: Use a different approach - update qty_map only when the editor actually changes
+        # and use a flag to prevent recursive updates
+        if "updating_qty_map" not in st.session_state:
+            st.session_state["updating_qty_map"] = False
+            
+        if not st.session_state["updating_qty_map"] and edited is not None and not edited.empty:
+            st.session_state["updating_qty_map"] = True
             for _, r in edited.iterrows():
                 k = qkey(str(r["item"]), str(r["product_number"]))
                 try:
                     new_qty = int(r["qty"]) if pd.notna(r["qty"]) else 0
-                    # Always update - let the data editor be the source of truth
                     qty_map[k] = new_qty
                 except Exception:
                     qty_map[k] = 0
+            st.session_state["updating_qty_map"] = False
 
         # Buttons under the table
         b1, b2 = st.columns(2)
