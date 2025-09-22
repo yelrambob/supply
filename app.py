@@ -7,7 +7,7 @@ import re
 import smtplib, ssl
 from email.message import EmailMessage
 
-st.set_page_config(page_title="Supply Ordering", page_icon="📦", layout="wide")
+st.set_page_config(page_title="Supply Ordering", page_icon="��", layout="wide")
 
 # ---------------- Paths ----------------
 APP_DIR = Path(__file__).resolve().parent
@@ -310,6 +310,10 @@ if "allow_prefill_from_last" not in st.session_state:
 if "editor_nonce" not in st.session_state:
     st.session_state["editor_nonce"] = 0
 
+# NEW: Flag to track data editor changes
+if "data_editor_changed" not in st.session_state:
+    st.session_state["data_editor_changed"] = False
+
 # ---------------- UI ----------------
 st.title("📦 Supply Ordering & Inventory Tracker")
 
@@ -366,6 +370,7 @@ with tabs[0]:
                 st.session_state["qty_map"] = {}
                 st.session_state["allow_prefill_from_last"] = False  # don't re-prefill after clear
                 st.session_state["editor_nonce"] += 1                 # rebuild table widget
+                st.session_state["data_editor_changed"] = False      # reset change flag
                 st.success("Cleared all quantities.")
                 st.rerun()
 
@@ -428,6 +433,10 @@ with tabs[0]:
 
         show_cols = ["qty", "item", "product_number", "last_ordered_at", "last_qty", "last_orderer"]
 
+        # Callback function to handle data editor changes
+        def on_data_editor_change():
+            st.session_state["data_editor_changed"] = True
+
         # Use a key tied to a nonce so clearing/logging forces a fresh widget state
         edited = st.data_editor(
             table[show_cols],
@@ -442,19 +451,21 @@ with tabs[0]:
                 "last_orderer": st.column_config.TextColumn("Last by", disabled=True),
             },
             key=f"order_editor_{st.session_state['editor_nonce']}",
+            on_change=on_data_editor_change,
         )
 
-        # Only update qty_map when the data editor actually changes
-        if edited is not None and not edited.empty:
+        # Only update qty_map when the data editor actually changes AND we haven't already processed this change
+        if st.session_state.get("data_editor_changed", False) and edited is not None and not edited.empty:
+            # Reset the flag immediately to prevent recursive updates
+            st.session_state["data_editor_changed"] = False
+            
             for _, r in edited.iterrows():
                 k = qkey(str(r["item"]), str(r["product_number"]))
                 try:
                     new_qty = int(r["qty"]) if pd.notna(r["qty"]) else 0
-                    if k not in qty_map or qty_map[k] != new_qty:
-                        qty_map[k] = new_qty
+                    qty_map[k] = new_qty
                 except Exception:
-                    if k not in qty_map or qty_map[k] != 0:
-                        qty_map[k] = 0
+                    qty_map[k] = 0
 
         # Buttons under the table
         b1, b2 = st.columns(2)
@@ -521,6 +532,7 @@ with tabs[0]:
             st.session_state["qty_map"] = {}
             st.session_state["allow_prefill_from_last"] = False
             st.session_state["editor_nonce"] += 1
+            st.session_state["data_editor_changed"] = False
             st.rerun()
 
         with b1:
@@ -530,7 +542,7 @@ with tabs[0]:
                     _log_and_email(selected, do_decrement=False)
 
         with b2:
-            if st.button("🧾 Generate, Log, & Decrement", use_container_width=True, key="btn_log_dec"):
+            if st.button("�� Generate, Log, & Decrement", use_container_width=True, key="btn_log_dec"):
                 selected = _selected_from_state()
                 if not selected.empty:
                     _log_and_email(selected, do_decrement=True)
@@ -640,6 +652,7 @@ with tabs[4]:
                     st.session_state["qty_map"] = {}
                     st.session_state["allow_prefill_from_last"] = False
                     st.session_state["editor_nonce"] += 1
+                    st.session_state["data_editor_changed"] = False
                 if opt_last:
                     pd.DataFrame(columns=LAST_ORDER_COLUMNS).to_csv(LAST_PATH, index=False)
                 if opt_logs:
