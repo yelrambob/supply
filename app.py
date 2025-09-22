@@ -428,14 +428,7 @@ with tabs[0]:
 
         show_cols = ["qty", "item", "product_number", "last_ordered_at", "last_qty", "last_orderer"]
 
-        # Use a callback to handle state updates properly
-        def on_data_change():
-            # This will be called when the data editor changes
-            pass
-
-        # Use a unique key that changes when we want to reset the editor
-        editor_key = f"order_editor_{st.session_state['editor_nonce']}"
-        
+        # Use a key tied to a nonce so clearing/logging forces a fresh widget state
         edited = st.data_editor(
             table[show_cols],
             use_container_width=True,
@@ -448,25 +441,20 @@ with tabs[0]:
                 "last_qty": st.column_config.NumberColumn("Last qty", disabled=True),
                 "last_orderer": st.column_config.TextColumn("Last by", disabled=True),
             },
-            key=editor_key,
-            on_change=on_data_change,
+            key=f"order_editor_{st.session_state['editor_nonce']}",
         )
 
-        # FIXED: Use a different approach - update qty_map only when the editor actually changes
-        # and use a flag to prevent recursive updates
-        if "updating_qty_map" not in st.session_state:
-            st.session_state["updating_qty_map"] = False
-            
-        if not st.session_state["updating_qty_map"] and edited is not None and not edited.empty:
-            st.session_state["updating_qty_map"] = True
+        # Only update qty_map when the data editor actually changes
+        if edited is not None and not edited.empty:
             for _, r in edited.iterrows():
                 k = qkey(str(r["item"]), str(r["product_number"]))
                 try:
                     new_qty = int(r["qty"]) if pd.notna(r["qty"]) else 0
-                    qty_map[k] = new_qty
+                    if k not in qty_map or qty_map[k] != new_qty:
+                        qty_map[k] = new_qty
                 except Exception:
-                    qty_map[k] = 0
-            st.session_state["updating_qty_map"] = False
+                    if k not in qty_map or qty_map[k] != 0:
+                        qty_map[k] = 0
 
         # Buttons under the table
         b1, b2 = st.columns(2)
