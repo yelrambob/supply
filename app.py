@@ -8,12 +8,6 @@ import smtplib, ssl
 from email.message import EmailMessage
 
 st.set_page_config(page_title="Supply Ordering", page_icon="📦", layout="wide")
-#------------------Clear Qtys---------------
-def clear_quantities_ui():
-    """Clear all on-screen quantities and the editor cache."""
-    st.session_state["qty_map"] = {}
-    # also clear the data_editor's stored dataframe so cells reset to 0 immediately
-    st.session_state.pop("order_editor", None)
 
 # ---------------- Paths ----------------
 APP_DIR = Path(__file__).resolve().parent
@@ -500,8 +494,8 @@ with tabs[0]:
             else:
                 st.info("Email disabled — configure .streamlit/secrets.toml [smtp].")
 
-            # Clear on-screen quantities right after logging
-            clear_quantities_ui()
+            # Clear in-memory quantities after logging
+            st.session_state["qty_map"] = {}
             st.rerun()
 
         with b1:
