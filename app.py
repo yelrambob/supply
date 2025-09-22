@@ -294,25 +294,8 @@ def all_recipients(emails_df: pd.DataFrame) -> list[str]:
     return sorted(recipients)
 
 # ---------------- Session state ----------------
-def qkey(item: str, pn: str) -> str:
-    return f"{item}||{str(pn)}"
-
-if "qty_map" not in st.session_state:
-    st.session_state["qty_map"] = {}   # {(item||pn): int}
 if "orderer" not in st.session_state:
     st.session_state["orderer"] = None
-
-# NEW: Only prefill from last order once per session
-if "allow_prefill_from_last" not in st.session_state:
-    st.session_state["allow_prefill_from_last"] = True
-
-# NEW: Nonce to force data_editor to rebuild after clear/log
-if "editor_nonce" not in st.session_state:
-    st.session_state["editor_nonce"] = 0
-
-# NEW: Flag to track data editor changes
-if "data_editor_changed" not in st.session_state:
-    st.session_state["data_editor_changed"] = False
 
 # ---------------- UI ----------------
 st.title("📦 Supply Ordering & Inventory Tracker")
@@ -367,10 +350,6 @@ with tabs[0]:
             search = st.text_input("Search items", key="order_search")
         with c3:
             if st.button("🧼 Clear quantities", use_container_width=True, key="btn_clear_qty"):
-                st.session_state["qty_map"] = {}
-                st.session_state["allow_prefill_from_last"] = False  # don't re-prefill after clear
-                st.session_state["editor_nonce"] += 1                 # rebuild table widget
-                st.session_state["data_editor_changed"] = False      # reset change flag
                 st.success("Cleared all quantities.")
                 st.rerun()
 
@@ -409,35 +388,19 @@ with tabs[0]:
         if search:
             table = table[table["item"].str.contains(search, case=False, na=False)]
 
-        # Persistent qty prefill
-        qty_map = st.session_state["qty_map"]
+        # Prepare UI columns - KEY DIFFERENCE: Direct DataFrame manipulation like old code
+        table["last_qty"] = pd.to_numeric(table.get("last_qty"), errors="coerce")
+        table["qty"] = 0
 
-        # NEW: Prefill from last order only ONCE per session (and never after clear/log)
-        if (
-            not qty_map
-            and not last_order_df.empty
-            and st.session_state.get("allow_prefill_from_last", False)
-        ):
-            for _, r in last_order_df.iterrows():
-                qty_map[qkey(str(r["item"]), str(r["product_number"]))] = int(r["qty"])
-            st.session_state["allow_prefill_from_last"] = False  # disable further prefill
-
-        def get_qty(row) -> int:
-            return int(qty_map.get(qkey(row["item"], row["product_number"]), 0))
-
-        table = table.copy()
-        table["qty"] = table.apply(get_qty, axis=1)
-
-        # Reset index so edits stick even after sort/filter
-        table = table.reset_index(drop=True)
+        # Prefill qty from last generated order (optional convenience)
+        if not last_order_df.empty:
+            prev_map = {(r["item"], str(r["product_number"])): int(r["qty"]) for _, r in last_order_df.iterrows()}
+            for i, r in table.iterrows():
+                key = (r["item"], str(r["product_number"]))
+                if key in prev_map:
+                    table.at[i, "qty"] = int(prev_map[key])
 
         show_cols = ["qty", "item", "product_number", "last_ordered_at", "last_qty", "last_orderer"]
-
-        # Callback function to handle data editor changes
-        def on_data_editor_change():
-            st.session_state["data_editor_changed"] = True
-
-        # Use a key tied to a nonce so clearing/logging forces a fresh widget state
         edited = st.data_editor(
             table[show_cols],
             use_container_width=True,
@@ -450,42 +413,21 @@ with tabs[0]:
                 "last_qty": st.column_config.NumberColumn("Last qty", disabled=True),
                 "last_orderer": st.column_config.TextColumn("Last by", disabled=True),
             },
-            key=f"order_editor_{st.session_state['editor_nonce']}",
-            on_change=on_data_editor_change,
+            key="order_editor",
         )
-
-        # Only update qty_map when the data editor actually changes AND we haven't already processed this change
-        if st.session_state.get("data_editor_changed", False) and edited is not None and not edited.empty:
-            # Reset the flag immediately to prevent recursive updates
-            st.session_state["data_editor_changed"] = False
-            
-            for _, r in edited.iterrows():
-                k = qkey(str(r["item"]), str(r["product_number"]))
-                try:
-                    new_qty = int(r["qty"]) if pd.notna(r["qty"]) else 0
-                    qty_map[k] = new_qty
-                except Exception:
-                    qty_map[k] = 0
 
         # Buttons under the table
         b1, b2 = st.columns(2)
 
         def _selected_from_state() -> pd.DataFrame:
-            rows = []
-            cat_lookup = set((str(c["item"]), str(c["product_number"])) for _, c in catalog.iterrows())
-            for key, qty in qty_map.items():
-                if qty and qty > 0:
-                    item, pn = key.split("||", 1)
-                    if (item, pn) in cat_lookup:
-                        rows.append({"item": item, "product_number": pn, "qty": int(qty)})
-            df = pd.DataFrame(rows)
-            if df.empty:
+            chosen = edited[edited["qty"] > 0].copy()
+            if chosen.empty:
                 st.error("Please set Qty > 0 for at least one item.")
                 return pd.DataFrame()
             if not people or st.session_state.get("orderer") == "(add names in data/people.txt)":
                 st.error("Please add/select an orderer in data/people.txt.")
                 return pd.DataFrame()
-            return df
+            return chosen[["item", "product_number", "qty"]].copy()
 
         def _log_and_email(order_df: pd.DataFrame, do_decrement: bool):
             orderer_local = st.session_state.get("orderer") or ""
@@ -528,11 +470,7 @@ with tabs[0]:
             else:
                 st.info("Email disabled — fix .streamlit/secrets.toml [smtp].")
 
-            # NEW: Clear quantities, prevent re-prefill, and force table rebuild
-            st.session_state["qty_map"] = {}
-            st.session_state["allow_prefill_from_last"] = False
-            st.session_state["editor_nonce"] += 1
-            st.session_state["data_editor_changed"] = False
+            # Refresh so "Last ordered" updates and top copy block refreshes
             st.rerun()
 
         with b1:
@@ -648,11 +586,6 @@ with tabs[4]:
     with c1:
         if st.button("🧨 Clear ALL selected info", type="primary", disabled=not confirm, key="btn_clear_all"):
             try:
-                if opt_qty:
-                    st.session_state["qty_map"] = {}
-                    st.session_state["allow_prefill_from_last"] = False
-                    st.session_state["editor_nonce"] += 1
-                    st.session_state["data_editor_changed"] = False
                 if opt_last:
                     pd.DataFrame(columns=LAST_ORDER_COLUMNS).to_csv(LAST_PATH, index=False)
                 if opt_logs:
