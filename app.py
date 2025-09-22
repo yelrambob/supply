@@ -301,10 +301,6 @@ def all_recipients(emails_df: pd.DataFrame) -> list[str]:
 if "orderer" not in st.session_state:
     st.session_state["orderer"] = None
 
-# NEW: Flag to prevent prefill after logging
-if "prefill_disabled" not in st.session_state:
-    st.session_state["prefill_disabled"] = False
-
 # ---------------- UI ----------------
 st.title("📦 Supply Ordering & Inventory Tracker")
 
@@ -358,7 +354,6 @@ with tabs[0]:
             search = st.text_input("Search items", key="order_search")
         with c3:
             if st.button("🧼 Clear quantities", use_container_width=True, key="btn_clear_qty"):
-                st.session_state["prefill_disabled"] = True
                 st.success("Cleared all quantities.")
                 st.rerun()
 
@@ -401,8 +396,8 @@ with tabs[0]:
         table["last_qty"] = pd.to_numeric(table.get("last_qty"), errors="coerce")
         table["qty"] = 0
 
-        # Prefill qty from last generated order (optional convenience) - ONLY if not disabled
-        if not last_order_df.empty and not st.session_state.get("prefill_disabled", False):
+        # Prefill qty from last generated order (optional convenience)
+        if not last_order_df.empty:
             prev_map = {(r["item"], str(r["product_number"])): int(r["qty"]) for _, r in last_order_df.iterrows()}
             for i, r in table.iterrows():
                 key = (r["item"], str(r["product_number"]))
@@ -481,8 +476,7 @@ with tabs[0]:
             else:
                 st.info("Email disabled — fix .streamlit/secrets.toml [smtp].")
 
-            # Clear quantities by disabling prefill and forcing rerun
-            st.session_state["prefill_disabled"] = True
+            # Clear quantities by forcing rerun
             st.rerun()
 
         with b1:
@@ -606,8 +600,6 @@ with tabs[4]:
     with c1:
         if st.button("🧨 Clear ALL selected info", type="primary", disabled=not confirm, key="btn_clear_all"):
             try:
-                if opt_qty:
-                    st.session_state["prefill_disabled"] = True
                 if opt_last:
                     pd.DataFrame(columns=LAST_ORDER_COLUMNS).to_csv(LAST_PATH, index=False)
                 if opt_logs:
