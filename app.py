@@ -41,78 +41,38 @@ ensure_headers(LOG_PATH, ORDER_LOG_COLUMNS)
 ensure_headers(LAST_PATH, LAST_ORDER_COLUMNS)
 
 # ---------------- SMTP ----------------
-def get_smtp_config():
-    """
-    Normalizes .streamlit/secrets.toml [smtp] into a single dict.
-    Supports both:
-      - server/username/password/from  (SSL on 465 by default)
-      - host/user/password/use_ssl/from/force_from_user/to (STARTTLS if use_ssl=false or port==587)
-    """
-    s = st.secrets.get("smtp", {})
-    host = s.get("server") or s.get("host")
-    port = int(s.get("port", 465))
-    username = s.get("username") or s.get("user")
-    # strip spaces in case a Gmail app password was pasted with spaces
-    password = (s.get("password") or "").replace(" ", "")
-    mail_from = s.get("from") or username or ""
-    subject_prefix = s.get("subject_prefix", "")
-    default_to = s.get("to", "")
-    force_from_user = bool(s.get("force_from_user", False))
-
-    # Decide SSL vs STARTTLS
-    if "use_ssl" in s:
-        use_ssl = bool(s.get("use_ssl"))
-    else:
-        use_ssl = (port == 465)  # sensible default
-
-    # For Gmail, From generally must be the authenticated user
-    if force_from_user or ("gmail.com" in (username or "")):
-        mail_from = username or mail_from
-
-    return {
-        "host": host,
-        "port": port,
-        "username": username,
-        "password": password,
-        "from": mail_from,
-        "subject_prefix": subject_prefix,
-        "default_to": default_to,       # optional default recipients, comma-separated
-        "use_ssl": use_ssl,
-    }
-
-
 def smtp_ok() -> bool:
-    cfg = get_smtp_config()
-    required = ["host", "port", "username", "password", "from"]
-    return all(cfg.get(k) for k in required)
-
+    try:
+        s = st.secrets["smtp"]
+        needed = ["server", "port", "username", "password", "from"]
+        return all(s.get(k) for k in needed)
+    except Exception:
+        return False
 
 def send_email(subject: str, body: str, to_emails: list[str]):
-    cfg = get_smtp_config()
-    if not to_emails:
-        raise RuntimeError("No recipients provided.")
-
+    s = st.secrets["smtp"]
+    ctx = ssl.create_default_context()
     msg = EmailMessage()
-    if cfg["subject_prefix"]:
-        msg["Subject"] = f'{cfg["subject_prefix"]}{subject}'
-    else:
-        msg["Subject"] = subject
-    msg["From"] = cfg["from"]
+    prefix = s.get("subject_prefix", "")
+    msg["Subject"] = f"{prefix}{subject}" if prefix else subject
+
+    # From must be an email; fallback to username
+    from_header = s.get("from") or s.get("username")
+    if "@" not in str(from_header):
+        from_header = s.get("username")
+    msg["From"] = from_header
+
+    if s.get("reply_to"):
+        msg["Reply-To"] = s["reply_to"]
     msg["To"] = ", ".join(to_emails)
     msg.set_content(body)
 
-    if cfg["use_ssl"]:
-        # SSL (e.g., Gmail 465)
-        with smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=ssl.create_default_context()) as server:
-            server.login(cfg["username"], cfg["password"])
-            server.send_message(msg)
-    else:
-        # STARTTLS (e.g., Gmail 587)
-        with smtplib.SMTP(cfg["host"], cfg["port"]) as server:
-            server.ehlo()
-            server.starttls(context=ssl.create_default_context())
-            server.login(cfg["username"], cfg["password"])
-            server.send_message(msg)
+    # Strip spaces from Gmail app password (defensive)
+    pwd = (s.get("password") or "").replace(" ", "")
+
+    with smtplib.SMTP_SSL(s["server"], int(s["port"]), context=ctx) as server:
+        server.login(s["username"], pwd)
+        server.send_message(msg)
 
 # ---------------- Load core data ----------------
 @st.cache_data
@@ -313,18 +273,6 @@ st.caption(
 tabs = st.tabs(["Create Order", "Adjust Inventory", "Catalog", "Order Logs", "Tools"])
 
 # ---------- Create Order ----------
-# --- apply any pending edits from the previous render BEFORE rebuilding the table ---
-if "order_editor" in st.session_state:
-    edited_df = st.session_state["order_editor"]
-    if isinstance(edited_df, pd.DataFrame) and not edited_df.empty:
-        qmap = st.session_state.get("qty_map", {})
-        for _, r in edited_df.iterrows():
-            k = f"{str(r['item'])}||{str(r['product_number'])}"
-            try:
-                qmap[k] = int(r.get("qty", 0)) if pd.notna(r.get("qty", 0)) else 0
-            except Exception:
-                qmap[k] = 0
-        st.session_state["qty_map"] = qmap
 with tabs[0]:
     # Last generated (collapsible)
     with st.expander("📋 Last generated order (copy/download)", expanded=False):
@@ -429,13 +377,13 @@ with tabs[0]:
             key="order_editor",
         )
 
-        # # Write back to qty_map (visible rows)
-        # for _, r in edited.iterrows():
-        #     k = qkey(str(r["item"]), str(r["product_number"]))
-        #     try:
-        #         qty_map[k] = int(r["qty"]) if pd.notna(r["qty"]) else 0
-        #     except Exception:
-        #         qty_map[k] = 0
+        # Write back to qty_map (visible rows)
+        for _, r in edited.iterrows():
+            k = qkey(str(r["item"]), str(r["product_number"]))
+            try:
+                qty_map[k] = int(r["qty"]) if pd.notna(r["qty"]) else 0
+            except Exception:
+                qty_map[k] = 0
 
         # Buttons under the table
         b1, b2 = st.columns(2)
