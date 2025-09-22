@@ -297,54 +297,11 @@ def all_recipients(emails_df: pd.DataFrame) -> list[str]:
 def qkey(item: str, pn: str) -> str:
     return f"{item}||{str(pn)}"
 
-        # Persistent qty prefill
-        qty_map = st.session_state["qty_map"]
-
-        # Prefill from last order only if map is empty
-        if not qty_map and not last_order_df.empty:
-            for _, r in last_order_df.iterrows():
-                qty_map[qkey(str(r["item"]), str(r["product_number"]))] = int(r["qty"])
-
-        def get_qty(row) -> int:
-            return int(qty_map.get(qkey(row["item"], row["product_number"]), 0))
-
-        table = table.copy()
-        table["qty"] = table.apply(get_qty, axis=1)
-
-        # Reset index so edits stick even after sort/filter
-        table = table.reset_index(drop=True)
-
-        show_cols = ["qty", "item", "product_number", "last_ordered_at", "last_qty", "last_orderer"]
-        
-        # Use a unique key for the data editor to prevent state conflicts
-        editor_key = f"order_editor_{hash(str(table[['item', 'product_number']].values.tolist()))}"
-        
-        edited = st.data_editor(
-            table[show_cols],
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "qty": st.column_config.NumberColumn("Qty", min_value=0, step=1),
-                "item": st.column_config.TextColumn("Item", disabled=True),
-                "product_number": st.column_config.TextColumn("Product #", disabled=True),
-                "last_ordered_at": st.column_config.DatetimeColumn("Last ordered", format="YYYY-MM-DD HH:mm", disabled=True),
-                "last_qty": st.column_config.NumberColumn("Last qty", disabled=True),
-                "last_orderer": st.column_config.TextColumn("Last by", disabled=True),
-            },
-            key=editor_key,
-        )
-
-        # Write back to qty_map (visible rows) - only update if values actually changed
-        for _, r in edited.iterrows():
-            k = qkey(str(r["item"]), str(r["product_number"]))
-            try:
-                new_qty = int(r["qty"]) if pd.notna(r["qty"]) else 0
-                # Only update if the value actually changed
-                if k not in qty_map or qty_map[k] != new_qty:
-                    qty_map[k] = new_qty
-            except Exception:
-                if k not in qty_map or qty_map[k] != 0:
-                    qty_map[k] = 0
+if "qty_map" not in st.session_state:
+    st.session_state["qty_map"] = {}   # {(item||pn): int}
+if "orderer" not in st.session_state:
+    # Persist last chosen orderer across reruns
+    st.session_state["orderer"] = None
 
 # ---------------- UI ----------------
 st.title("📦 Supply Ordering & Inventory Tracker")
@@ -456,6 +413,10 @@ with tabs[0]:
         table = table.reset_index(drop=True)
 
         show_cols = ["qty", "item", "product_number", "last_ordered_at", "last_qty", "last_orderer"]
+        
+        # Use a unique key for the data editor to prevent state conflicts
+        editor_key = f"order_editor_{hash(str(table[['item', 'product_number']].values.tolist()))}"
+        
         edited = st.data_editor(
             table[show_cols],
             use_container_width=True,
@@ -468,16 +429,20 @@ with tabs[0]:
                 "last_qty": st.column_config.NumberColumn("Last qty", disabled=True),
                 "last_orderer": st.column_config.TextColumn("Last by", disabled=True),
             },
-            key="order_editor",
+            key=editor_key,
         )
 
-        # Write back to qty_map (visible rows)
+        # Write back to qty_map (visible rows) - only update if values actually changed
         for _, r in edited.iterrows():
             k = qkey(str(r["item"]), str(r["product_number"]))
             try:
-                qty_map[k] = int(r["qty"]) if pd.notna(r["qty"]) else 0
+                new_qty = int(r["qty"]) if pd.notna(r["qty"]) else 0
+                # Only update if the value actually changed
+                if k not in qty_map or qty_map[k] != new_qty:
+                    qty_map[k] = new_qty
             except Exception:
-                qty_map[k] = 0
+                if k not in qty_map or qty_map[k] != 0:
+                    qty_map[k] = 0
 
         # Buttons under the table
         b1, b2 = st.columns(2)
@@ -507,7 +472,7 @@ with tabs[0]:
             
             # Append to durable log CSV (persists after reboot)
             when_str = append_log(order_df, orderer_local)
-        
+
             # Decrement inventory if chosen
             if do_decrement:
                 cat2_local = catalog.copy()
@@ -517,7 +482,7 @@ with tabs[0]:
                         pd.to_numeric(cat2_local.loc[mask, "current_qty"], errors="coerce").fillna(0).astype(int) - int(r["qty"])
                     ).clip(lower=0)
                 write_catalog(cat2_local)
-        
+
             # Email everyone from emails.csv and/or secrets.to
             recipients = []
             if smtp_ok():
@@ -540,13 +505,25 @@ with tabs[0]:
                     st.info("No recipients found in emails.csv nor [smtp].to.")
             else:
                 st.info("Email disabled — fix .streamlit/secrets.toml [smtp].")
-        
+
             # Clear in-memory quantities after logging and refresh UI
             st.session_state["qty_map"] = {}
             
             # Force a complete page refresh to ensure the data editor reflects the cleared state
             st.cache_data.clear()
             st.rerun()
+
+        with b1:
+            if st.button("🧾 Generate & Log Order", use_container_width=True, key="btn_log"):
+                selected = _selected_from_state()
+                if not selected.empty:
+                    _log_and_email(selected, do_decrement=False)
+
+        with b2:
+            if st.button("�� Generate, Log, & Decrement", use_container_width=True, key="btn_log_dec"):
+                selected = _selected_from_state()
+                if not selected.empty:
+                    _log_and_email(selected, do_decrement=True)
 
 # ---------- Adjust Inventory ----------
 with tabs[1]:
