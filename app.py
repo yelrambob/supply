@@ -352,11 +352,11 @@ with tabs[0]:
             st.session_state["orderer"] = orderer
         with c2:
             search = st.text_input("Search items", key="order_search")
-        with c3:
-            if st.button("🧼 Clear quantities", use_container_width=True, key="btn_clear_qty"):
-                st.session_state["prefill_disabled"] = True
-                st.success("Cleared all quantities.")
-                st.rerun()
+        # with c3:
+        #     if st.button("🧼 Clear quantities", use_container_width=True, key="btn_clear_qty"):
+        #         st.session_state["prefill_disabled"] = True
+        #         st.success("Cleared all quantities.")
+        #         st.rerun()
 
         # Merge last-ordered info (force string keys both sides)
         last_map = last_info_map()
