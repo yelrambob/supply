@@ -313,19 +313,6 @@ st.caption(
 tabs = st.tabs(["Create Order", "Adjust Inventory", "Catalog", "Order Logs", "Tools"])
 
 # ---------- Create Order ----------
-# --- apply any pending edits from the previous render BEFORE rebuilding the table ---
-if "order_editor" in st.session_state:
-    edited_df = st.session_state["order_editor"]
-    if isinstance(edited_df, pd.DataFrame) and not edited_df.empty:
-        qmap = st.session_state.get("qty_map", {})
-        for _, r in edited_df.iterrows():
-            k = f"{str(r['item'])}||{str(r['product_number'])}"
-            try:
-                qmap[k] = int(r.get("qty", 0)) if pd.notna(r.get("qty", 0)) else 0
-            except Exception:
-                qmap[k] = 0
-        st.session_state["qty_map"] = qmap
-
 with tabs[0]:
     # Last generated (collapsible)
     with st.expander("📋 Last generated order (copy/download)", expanded=False):
@@ -430,13 +417,13 @@ with tabs[0]:
             key="order_editor",
         )
 
-        # # Write back to qty_map (visible rows)
-        # for _, r in edited.iterrows():
-        #     k = qkey(str(r["item"]), str(r["product_number"]))
-        #     try:
-        #         qty_map[k] = int(r["qty"]) if pd.notna(r["qty"]) else 0
-        #     except Exception:
-        #         qty_map[k] = 0
+        # Write back to qty_map (visible rows)
+        for _, r in edited.iterrows():
+            k = qkey(str(r["item"]), str(r["product_number"]))
+            try:
+                qty_map[k] = int(r["qty"]) if pd.notna(r["qty"]) else 0
+            except Exception:
+                qty_map[k] = 0
 
         # Buttons under the table
         b1, b2 = st.columns(2)
