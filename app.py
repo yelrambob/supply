@@ -309,8 +309,10 @@ with tabs[0]:
             }
         )
 
-        for _, r in edited.iterrows():
-            st.session_state["qty_map"][qkey(r["item"], r["product_number"])] = int(r["qty"])
+        for idx, r in edited.iterrows():
+            key = qkey(r["item"], r["product_number"])
+            st.session_state["qty_map"][key] = int(r["qty"]) if pd.notna(r["qty"]) else 0
+        
 
         def _log_and_email(order_df: pd.DataFrame):
             when_str = append_log(order_df, orderer)
