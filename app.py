@@ -485,11 +485,11 @@ with tabs[0]:
                 if not selected.empty:
                     _log_and_email(selected, do_decrement=False)
 
-        with b2:
-            if st.button(" Generate, Log, & Decrement", use_container_width=True, key="btn_log_dec"):
-                selected = _selected_from_state()
-                if not selected.empty:
-                    _log_and_email(selected, do_decrement=True)
+        # with b2:
+        #     if st.button(" Generate, Log, & Decrement", use_container_width=True, key="btn_log_dec"):
+        #         selected = _selected_from_state()
+        #         if not selected.empty:
+        #             _log_and_email(selected, do_decrement=True)
 
 # ---------- Adjust Inventory ----------
 with tabs[1]:
