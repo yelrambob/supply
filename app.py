@@ -430,13 +430,13 @@ with tabs[0]:
             key="order_editor",
         )
 
-        # Write back to qty_map (visible rows)
-        for _, r in edited.iterrows():
-            k = qkey(str(r["item"]), str(r["product_number"]))
-            try:
-                qty_map[k] = int(r["qty"]) if pd.notna(r["qty"]) else 0
-            except Exception:
-                qty_map[k] = 0
+        # # Write back to qty_map (visible rows)
+        # for _, r in edited.iterrows():
+        #     k = qkey(str(r["item"]), str(r["product_number"]))
+        #     try:
+        #         qty_map[k] = int(r["qty"]) if pd.notna(r["qty"]) else 0
+        #     except Exception:
+        #         qty_map[k] = 0
 
         # Buttons under the table
         b1, b2 = st.columns(2)
