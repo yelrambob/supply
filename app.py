@@ -444,17 +444,16 @@ with tabs[0]:
             key=f"order_editor_{st.session_state['editor_nonce']}",
         )
 
-        # Only update qty_map when the data editor actually changes
+        # FIXED: Always update qty_map from data editor, but use a different approach
         if edited is not None and not edited.empty:
             for _, r in edited.iterrows():
                 k = qkey(str(r["item"]), str(r["product_number"]))
                 try:
                     new_qty = int(r["qty"]) if pd.notna(r["qty"]) else 0
-                    if k not in qty_map or qty_map[k] != new_qty:
-                        qty_map[k] = new_qty
+                    # Always update - let the data editor be the source of truth
+                    qty_map[k] = new_qty
                 except Exception:
-                    if k not in qty_map or qty_map[k] != 0:
-                        qty_map[k] = 0
+                    qty_map[k] = 0
 
         # Buttons under the table
         b1, b2 = st.columns(2)
