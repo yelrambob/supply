@@ -414,9 +414,7 @@ with tabs[0]:
 
         show_cols = ["qty", "item", "product_number", "last_ordered_at", "last_qty", "last_orderer"]
         
-        # Use a unique key for the data editor to prevent state conflicts
-        editor_key = f"order_editor_{hash(str(table[['item', 'product_number']].values.tolist()))}"
-        
+        # FIXED: Use a stable key that doesn't change on every rerun
         edited = st.data_editor(
             table[show_cols],
             use_container_width=True,
@@ -429,20 +427,17 @@ with tabs[0]:
                 "last_qty": st.column_config.NumberColumn("Last qty", disabled=True),
                 "last_orderer": st.column_config.TextColumn("Last by", disabled=True),
             },
-            key=editor_key,
+            key="order_editor",  # FIXED: Use a stable key
         )
 
-        # Write back to qty_map (visible rows) - only update if values actually changed
+        # FIXED: Update qty_map immediately when values change
         for _, r in edited.iterrows():
             k = qkey(str(r["item"]), str(r["product_number"]))
             try:
                 new_qty = int(r["qty"]) if pd.notna(r["qty"]) else 0
-                # Only update if the value actually changed
-                if k not in qty_map or qty_map[k] != new_qty:
-                    qty_map[k] = new_qty
+                qty_map[k] = new_qty  # Always update, no conditional check
             except Exception:
-                if k not in qty_map or qty_map[k] != 0:
-                    qty_map[k] = 0
+                qty_map[k] = 0
 
         # Buttons under the table
         b1, b2 = st.columns(2)
@@ -506,10 +501,8 @@ with tabs[0]:
             else:
                 st.info("Email disabled — fix .streamlit/secrets.toml [smtp].")
 
-            # Clear in-memory quantities after logging and refresh UI
+            # FIXED: Clear quantities and force complete refresh
             st.session_state["qty_map"] = {}
-            
-            # Force a complete page refresh to ensure the data editor reflects the cleared state
             st.cache_data.clear()
             st.rerun()
 
