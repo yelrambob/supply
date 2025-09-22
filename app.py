@@ -59,41 +59,64 @@ def _split_emails(txt: str) -> list[str]:
 def get_smtp_config():
     """
     Normalize .streamlit/secrets.toml [smtp].
-    Supports keys:
-      host/server, port, use_ssl (bool),
-      username/user, password (spaces stripped),
-      from, subject_prefix, to (string, comma/semicolon separated),
-      force_from_user (bool).
     """
-    s = st.secrets.get("smtp", {}) if hasattr(st, "secrets") else {}
-    host = s.get("server") or s.get("host")
+    try:
+        s = st.secrets.get("smtp", {})
+    except Exception as e:
+        st.error(f"Error reading secrets: {e}")
+        s = {}
+    
+    # Debug: show what we're getting from secrets
+    st.write("Debug - Raw secrets:", s)
+    
+    # Handle both 'server' and 'host' keys
+    host = s.get("host") or s.get("server")
+    
+    # Handle both 'user' and 'username' keys  
+    username = s.get("user") or s.get("username")
+    
+    # Get port, default to 465 if not specified
     port = int(s.get("port", 465))
-    username = s.get("username") or s.get("user")
-    # Gmail app password often pasted with spaces -> strip them
+    
+    # Get password and strip spaces (Gmail app passwords often have spaces)
     password = (s.get("password") or "").replace(" ", "")
+    
+    # Get from address, fallback to username
     mail_from = s.get("from") or username or ""
+    
+    # Get other optional fields
     subject_prefix = s.get("subject_prefix", "")
     force_from_user = bool(s.get("force_from_user", False))
-
-    # SSL vs STARTTLS decision
-    use_ssl = bool(s["use_ssl"]) if "use_ssl" in s else (port == 465)
-
+    
+    # Determine SSL usage
+    if "use_ssl" in s:
+        use_ssl = bool(s.get("use_ssl"))
+    else:
+        # Default based on port
+        use_ssl = (port == 465)
+    
     # Gmail requires From == authenticated user
     if force_from_user or ("gmail.com" in (username or "")):
         mail_from = username or mail_from
-
+    
+    # Parse recipients
     default_to = _split_emails(s.get("to", ""))
-
-    return {
+    
+    config = {
         "host": host,
         "port": port,
         "username": username,
         "password": password,
         "from": mail_from,
         "subject_prefix": subject_prefix,
-        "default_to": default_to,  # list[str]
+        "default_to": default_to,
         "use_ssl": use_ssl,
     }
+    
+    # Debug: show the parsed config
+    st.write("Debug - Parsed config:", {k: v for k, v in config.items() if k != "password"})
+    
+    return config
 
 def smtp_ok() -> bool:
     cfg = get_smtp_config()
