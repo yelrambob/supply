@@ -414,32 +414,40 @@ with tabs[0]:
 
         show_cols = ["qty", "item", "product_number", "last_ordered_at", "last_qty", "last_orderer"]
         
-        # FIXED: Use a stable key that doesn't change on every rerun
-        edited = st.data_editor(
-            table[show_cols],
-            use_container_width=True,
-            hide_index=True,
-            column_config={
-                "qty": st.column_config.NumberColumn("Qty", min_value=0, step=1),
-                "item": st.column_config.TextColumn("Item", disabled=True),
-                "product_number": st.column_config.TextColumn("Product #", disabled=True),
-                "last_ordered_at": st.column_config.DatetimeColumn("Last ordered", format="YYYY-MM-DD HH:mm", disabled=True),
-                "last_qty": st.column_config.NumberColumn("Last qty", disabled=True),
-                "last_orderer": st.column_config.TextColumn("Last by", disabled=True),
-            },
-            key="order_editor",  # FIXED: Use a stable key
-        )
+        # COMPLETELY DIFFERENT APPROACH: Use individual number inputs instead of data_editor
+        st.write("**Enter quantities for each item:**")
+        
+        # Create a form to handle all inputs at once
+        with st.form("quantity_form"):
+            # Create columns for the inputs
+            col1, col2, col3, col4, col5, col6 = st.columns(6)
+            
+            # Display items in a grid
+            for i, (_, row) in enumerate(table.iterrows()):
+                if i % 6 == 0:
+                    cols = [col1, col2, col3, col4, col5, col6]
+                
+                with cols[i % 6]:
+                    current_qty = qty_map.get(qkey(str(row["item"]), str(row["product_number"])), 0)
+                    new_qty = st.number_input(
+                        f"{row['item'][:15]}{'...' if len(row['item']) > 15 else ''}",
+                        min_value=0,
+                        value=current_qty,
+                        step=1,
+                        key=f"qty_input_{i}",
+                        help=f"Product #: {row['product_number']}"
+                    )
+                    # Update qty_map immediately
+                    qty_map[qkey(str(row["item"]), str(row["product_number"]))] = new_qty
+            
+            # Form submit buttons
+            col1, col2 = st.columns(2)
+            with col1:
+                submit_log = st.form_submit_button("�� Generate & Log Order", use_container_width=True)
+            with col2:
+                submit_log_dec = st.form_submit_button("🧾 Generate, Log, & Decrement", use_container_width=True)
 
-        # FIXED: Update qty_map immediately when values change
-        for _, r in edited.iterrows():
-            k = qkey(str(r["item"]), str(r["product_number"]))
-            try:
-                new_qty = int(r["qty"]) if pd.notna(r["qty"]) else 0
-                qty_map[k] = new_qty  # Always update, no conditional check
-            except Exception:
-                qty_map[k] = 0
-
-        # Buttons under the table
+        # Buttons under the form
         b1, b2 = st.columns(2)
 
         def _selected_from_state() -> pd.DataFrame:
@@ -501,22 +509,20 @@ with tabs[0]:
             else:
                 st.info("Email disabled — fix .streamlit/secrets.toml [smtp].")
 
-            # FIXED: Clear quantities and force complete refresh
+            # Clear in-memory quantities after logging and refresh UI
             st.session_state["qty_map"] = {}
-            st.cache_data.clear()
             st.rerun()
 
-        with b1:
-            if st.button("🧾 Generate & Log Order", use_container_width=True, key="btn_log"):
-                selected = _selected_from_state()
-                if not selected.empty:
-                    _log_and_email(selected, do_decrement=False)
+        # Handle form submissions
+        if submit_log:
+            selected = _selected_from_state()
+            if not selected.empty:
+                _log_and_email(selected, do_decrement=False)
 
-        with b2:
-            if st.button("�� Generate, Log, & Decrement", use_container_width=True, key="btn_log_dec"):
-                selected = _selected_from_state()
-                if not selected.empty:
-                    _log_and_email(selected, do_decrement=True)
+        if submit_log_dec:
+            selected = _selected_from_state()
+            if not selected.empty:
+                _log_and_email(selected, do_decrement=True)
 
 # ---------- Adjust Inventory ----------
 with tabs[1]:
