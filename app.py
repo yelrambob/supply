@@ -3,6 +3,7 @@ import pandas as pd
 from pandas.errors import EmptyDataError
 from datetime import datetime
 from pathlib import Path
+import re
 import smtplib, ssl
 from email.message import EmailMessage
 
@@ -83,20 +84,6 @@ def read_people() -> list[str]:
     except Exception as e:
         st.warning(f"Couldn't read people.txt: {e}")
         return []
-
-@st.cache_data
-def read_emails() -> pd.DataFrame:
-    df = safe_read_csv(EMAILS_PATH)
-    if df.empty:
-        return pd.DataFrame(columns=["name", "email"])
-    df.columns = [str(c).strip().lower() for c in df.columns]
-    if "email" not in df.columns:
-        return pd.DataFrame(columns=["name", "email"])
-    if "name" not in df.columns:
-        df["name"] = ""
-    df["email"] = df["email"].astype(str).str.strip()
-    df = df[df["email"].str.contains("@", na=False)].drop_duplicates(subset=["email"])
-    return df[["name", "email"]]
 
 @st.cache_data
 def read_catalog() -> pd.DataFrame:
@@ -194,6 +181,73 @@ def last_info_map() -> pd.DataFrame:
     tail["product_number"] = tail["product_number"].astype(str)
     return tail[["item","product_number","last_ordered_at","last_qty","last_orderer"]]
 
+# ---------------- Emails CSV: ALWAYS send to everyone listed ----------------
+@st.cache_data
+def read_emails() -> pd.DataFrame:
+    """
+    Return DataFrame with columns ['name','email'] where 'name' may be empty.
+    Accepts:
+      - name,email
+      - email
+      - single column with 'Name <email>' or 'Name, email'
+      - multiple comma/semicolon separated entries in one cell
+    """
+    df = safe_read_csv(EMAILS_PATH)
+    if df.empty:
+        return pd.DataFrame(columns=["name", "email"])
+
+    df.columns = [str(c).strip().lower() for c in df.columns]
+    email_re = re.compile(r'([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})')
+
+    def extract_email(s: str) -> str:
+        s = str(s or "")
+        m = email_re.search(s)
+        return m.group(1) if m else ""
+
+    out_rows = []
+
+    if "email" in df.columns:
+        name_col = "name" if "name" in df.columns else None
+        for _, r in df.iterrows():
+            raw_email = r.get("email", "")
+            email = extract_email(raw_email)
+            if not email:
+                continue
+            name = str(r.get(name_col, "")).strip() if name_col else ""
+            if not name:
+                raw = str(raw_email)
+                if "<" in raw and ">" in raw:
+                    name = raw.split("<", 1)[0].strip().strip(",")
+            out_rows.append({"name": name, "email": email})
+    else:
+        first_col = df.columns[0]
+        for _, r in df.iterrows():
+            raw = str(r.get(first_col, ""))
+            parts = [p.strip() for p in re.split(r'[;,]\s*', raw) if p.strip()]
+            if not parts:
+                parts = [raw]
+            for p in parts:
+                email = extract_email(p)
+                if email:
+                    name = ""
+                    if "<" in p and ">" in p:
+                        name = p.split("<", 1)[0].strip().strip(",")
+                    out_rows.append({"name": name, "email": email})
+
+    out = pd.DataFrame(out_rows)
+    if out.empty:
+        return pd.DataFrame(columns=["name", "email"])
+
+    out["email"] = out["email"].astype(str).str.strip()
+    out["name"] = out["name"].astype(str).str.strip()
+    out = out[out["email"].str.contains("@", na=False)].drop_duplicates(subset=["email"]).reset_index(drop=True)
+    return out[["name", "email"]]
+
+def all_recipients(emails_df: pd.DataFrame) -> list[str]:
+    if emails_df.empty:
+        return []
+    return sorted(emails_df["email"].astype(str).str.strip().unique().tolist())
+
 # ---------------- Persisted qty (in-session) ----------------
 def qkey(item: str, pn: str) -> str:
     return f"{item}||{str(pn)}"
@@ -212,7 +266,7 @@ last_order_df = read_last()
 
 st.caption(
     f"Loaded {len(catalog)} catalog rows • {len(logs)} log rows • "
-    f"Email configured: {'✅' if smtp_ok() else '❌'} • Recipients in emails.csv: "
+    f"Email configured: {'✅' if smtp_ok() else '❌'} • Recipients found: "
     f"{0 if emails_df.empty else len(emails_df)}"
 )
 
@@ -240,7 +294,7 @@ with tabs[0]:
     if catalog.empty:
         st.info("No catalog found. Put your list in data/catalog.csv (columns: item, product_number[, current_qty, sort_order]).")
     else:
-        c1, c2, c3, c4 = st.columns([2, 2, 2, 2])
+        c1, c2, c3 = st.columns([2, 2, 3])
         with c1:
             orderer = st.selectbox(
                 "Who is ordering?",
@@ -249,10 +303,8 @@ with tabs[0]:
                 key="order_orderer",
             )
         with c2:
-            cc_orderer = st.checkbox("CC the orderer (if email match)", value=True, key="order_cc_orderer")
-        with c3:
             search = st.text_input("Search items", key="order_search")
-        with c4:
+        with c3:
             if st.button("🧼 Clear quantities", use_container_width=True, key="btn_clear_qty"):
                 st.session_state["qty_map"] = {}
                 st.success("Cleared all quantities.")
@@ -306,7 +358,7 @@ with tabs[0]:
         table = table.copy()
         table["qty"] = table.apply(get_qty, axis=1)
 
-        # >>> IMPORTANT: reset index before passing to data_editor to avoid "disappearing" edits
+        # Reset index so edits stick even after sort/filter
         table = table.reset_index(drop=True)
 
         show_cols = ["qty", "item", "product_number", "last_ordered_at", "last_qty", "last_orderer"]
@@ -353,14 +405,6 @@ with tabs[0]:
                 return pd.DataFrame()
             return df
 
-        def _email_recipients(orderer_name: str, cc_orderer_flag: bool) -> list[str]:
-            recips = emails_df
-            to = set(recips["email"].tolist()) if not recips.empty else set()
-            if cc_orderer_flag and orderer_name and not recips.empty:
-                match = recips[recips["name"].str.strip().str.lower() == orderer_name.strip().lower()]
-                to.update(match["email"].tolist())
-            return sorted([e for e in to if e])
-
         def _log_and_email(order_df: pd.DataFrame, do_decrement: bool):
             # Save last generated (persists after reboot)
             write_last(order_df, orderer)
@@ -375,9 +419,9 @@ with tabs[0]:
                         pd.to_numeric(cat2.loc[mask, "current_qty"], errors="coerce").fillna(0).astype(int) - int(r["qty"])
                     ).clip(lower=0)
                 write_catalog(cat2)
-            # Email
+            # Email everyone from emails.csv
             if smtp_ok():
-                recipients = _email_recipients(orderer, cc_orderer)
+                recipients = all_recipients(emails_df)
                 if recipients:
                     lines = [f"- {r['item']} (#{r['product_number']}): {r['qty']}" for _, r in order_df.iterrows()]
                     body = "\n".join([
@@ -524,19 +568,24 @@ with tabs[4]:
                 st.rerun()
             except Exception as e:
                 st.error(f"Clear failed: {e}")
+
     with c2:
         st.markdown("### ")
-        if st.button("✉️ Send test email to yourself", key="btn_test_email", disabled=not smtp_ok()):
+        # Test email sends to EVERYONE found in emails.csv and shows exact failures.
+        if st.button("✉️ Send test email to everyone", key="btn_test_email"):
             try:
-                me = st.secrets["smtp"].get("username") or st.secrets["smtp"].get("from")
-                if not me or "@" not in me:
-                    st.error("Your SMTP 'username'/'from' must be a valid email.")
+                if not smtp_ok():
+                    st.error("SMTP not configured correctly in .streamlit/secrets.toml [smtp].")
                 else:
-                    send_email(
-                        subject="Test — Supply App",
-                        body="This is a test email from your Streamlit supply app.",
-                        to_emails=[me],
-                    )
-                    st.success(f"Test email sent to {me}.")
+                    recipients = all_recipients(emails_df)
+                    if not recipients:
+                        st.error("No recipients found in data/emails.csv.")
+                    else:
+                        send_email(
+                            subject="Test — Supply App",
+                            body="This is a test email from your Streamlit supply app.",
+                            to_emails=recipients,
+                        )
+                        st.success(f"Test email sent to {len(recipients)} recipient(s).")
             except Exception as e:
                 st.error(f"Test email failed: {e}")
