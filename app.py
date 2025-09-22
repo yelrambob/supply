@@ -7,7 +7,7 @@ import re
 import smtplib, ssl
 from email.message import EmailMessage
 
-st.set_page_config(page_title="Supply Ordering", page_icon="", layout="wide")
+st.set_page_config(page_title="Supply Ordering", page_icon="��", layout="wide")
 
 # ---------------- Paths ----------------
 APP_DIR = Path(__file__).resolve().parent
@@ -122,15 +122,17 @@ def read_people() -> list[str]:
 def read_catalog() -> pd.DataFrame:
     df = safe_read_csv(CATALOG_PATH)
     if df.empty:
-        return pd.DataFrame(columns=["item", "product_number", "current_qty", "sort_order"])
+        return pd.DataFrame(columns=["item", "product_number", "multiplier", "items_per_order", "current_qty", "sort_order"])
 
     # Ensure required columns exist
-    for c in ["item", "product_number", "current_qty", "sort_order"]:
+    for c in ["item", "product_number", "multiplier", "items_per_order", "current_qty", "sort_order"]:
         if c not in df.columns:
             df[c] = pd.NA
 
     df["item"] = df["item"].astype(str).str.strip()
     df["product_number"] = df["product_number"].astype(str).str.strip()  # keep as string key
+    df["multiplier"] = pd.to_numeric(df["multiplier"], errors="coerce").fillna(1).astype(int)
+    df["items_per_order"] = pd.to_numeric(df["items_per_order"], errors="coerce").fillna(1).astype(int)
     df["current_qty"] = pd.to_numeric(df["current_qty"], errors="coerce").fillna(0).astype(int)
 
     # Default sort order if missing
@@ -140,12 +142,14 @@ def read_catalog() -> pd.DataFrame:
 
     # Drop rows missing keys
     df = df[(df["item"] != "") & (df["product_number"] != "")]
-    return df[["item", "product_number", "current_qty", "sort_order"]].reset_index(drop=True)
+    return df[["item", "product_number", "multiplier", "items_per_order", "current_qty", "sort_order"]].reset_index(drop=True)
 
 def write_catalog(df: pd.DataFrame):
     df = df.copy()
     df["item"] = df["item"].astype(str)
     df["product_number"] = df["product_number"].astype(str)
+    df["multiplier"] = pd.to_numeric(df.get("multiplier", 1), errors="coerce").fillna(1).astype(int)
+    df["items_per_order"] = pd.to_numeric(df.get("items_per_order", 1), errors="coerce").fillna(1).astype(int)
     df["current_qty"] = pd.to_numeric(df.get("current_qty", 0), errors="coerce").fillna(0).astype(int)
     so = pd.to_numeric(df.get("sort_order", pd.Series(range(len(df)))), errors="coerce")
     df["sort_order"] = so.fillna(pd.Series(range(len(df)), index=df.index)).astype(int)
@@ -338,7 +342,7 @@ with tabs[0]:
             )
 
     if catalog.empty:
-        st.info("No catalog found. Put your list in data/catalog.csv (columns: item, product_number[, current_qty, sort_order]).")
+        st.info("No catalog found. Put your list in data/catalog.csv (columns: item, product_number, multiplier, items_per_order[, current_qty, sort_order]).")
     else:
         c1, c2, c3 = st.columns([2, 2, 3])
         with c1:
@@ -352,11 +356,11 @@ with tabs[0]:
             st.session_state["orderer"] = orderer
         with c2:
             search = st.text_input("Search items", key="order_search")
-        # with c3:
-        #     if st.button("🧼 Clear quantities", use_container_width=True, key="btn_clear_qty"):
-        #         st.session_state["prefill_disabled"] = True
-        #         st.success("Cleared all quantities.")
-        #         st.rerun()
+        with c3:
+            if st.button("🧼 Clear quantities", use_container_width=True, key="btn_clear_qty"):
+                st.session_state["prefill_disabled"] = True
+                st.success("Cleared all quantities.")
+                st.rerun()
 
         # Merge last-ordered info (force string keys both sides)
         last_map = last_info_map()
@@ -405,7 +409,7 @@ with tabs[0]:
                 if key in prev_map:
                     table.at[i, "qty"] = int(prev_map[key])
 
-        show_cols = ["qty", "item", "product_number", "last_ordered_at", "last_qty", "last_orderer"]
+        show_cols = ["qty", "item", "product_number", "multiplier", "items_per_order", "last_ordered_at", "last_qty", "last_orderer"]
         edited = st.data_editor(
             table[show_cols],
             use_container_width=True,
@@ -414,6 +418,8 @@ with tabs[0]:
                 "qty": st.column_config.NumberColumn("Qty", min_value=0, step=1),
                 "item": st.column_config.TextColumn("Item", disabled=True),
                 "product_number": st.column_config.TextColumn("Product #", disabled=True),
+                "multiplier": st.column_config.NumberColumn("Multiplier", min_value=1, step=1, disabled=True),
+                "items_per_order": st.column_config.NumberColumn("Items/Order", min_value=1, step=1, disabled=True),
                 "last_ordered_at": st.column_config.DatetimeColumn("Last ordered", format="YYYY-MM-DD HH:mm", disabled=True),
                 "last_qty": st.column_config.NumberColumn("Last qty", disabled=True),
                 "last_orderer": st.column_config.TextColumn("Last by", disabled=True),
@@ -485,11 +491,11 @@ with tabs[0]:
                 if not selected.empty:
                     _log_and_email(selected, do_decrement=False)
 
-        # with b2:
-        #     if st.button(" Generate, Log, & Decrement", use_container_width=True, key="btn_log_dec"):
-        #         selected = _selected_from_state()
-        #         if not selected.empty:
-        #             _log_and_email(selected, do_decrement=True)
+        with b2:
+            if st.button("�� Generate, Log, & Decrement", use_container_width=True, key="btn_log_dec"):
+                selected = _selected_from_state()
+                if not selected.empty:
+                    _log_and_email(selected, do_decrement=True)
 
 # ---------- Adjust Inventory ----------
 with tabs[1]:
@@ -505,6 +511,8 @@ with tabs[1]:
             column_config={
                 "item": st.column_config.TextColumn("Item", disabled=True),
                 "product_number": st.column_config.TextColumn("Product #", disabled=True),
+                "multiplier": st.column_config.NumberColumn("Multiplier", min_value=1, step=1),
+                "items_per_order": st.column_config.NumberColumn("Items/Order", min_value=1, step=1),
                 "current_qty": st.column_config.NumberColumn("Current Qty", min_value=0, step=1),
                 "sort_order": st.column_config.NumberColumn("Sort order", min_value=0, step=1),
             },
@@ -523,12 +531,16 @@ with tabs[2]:
         st.dataframe(catalog, use_container_width=True, hide_index=True)
 
     st.markdown("**Quick add**")
-    c1, c2, c3 = st.columns([2, 1, 1])
+    c1, c2, c3, c4, c5 = st.columns([2, 1, 1, 1, 1])
     with c1:
         new_item = st.text_input("Item name", key="cat_add_item")
     with c2:
         new_pn = st.text_input("Product #", key="cat_add_pn")
     with c3:
+        new_mult = st.number_input("Multiplier", min_value=1, value=1, step=1, key="cat_add_mult")
+    with c4:
+        new_ipo = st.number_input("Items/Order", min_value=1, value=1, step=1, key="cat_add_ipo")
+    with c5:
         new_qty = st.number_input("Current qty", min_value=0, value=0, step=1, key="cat_add_qty")
 
     if st.button("➕ Add to catalog", key="cat_add_btn"):
@@ -537,6 +549,8 @@ with tabs[2]:
             new_row = pd.DataFrame([{
                 "item": new_item.strip(),
                 "product_number": str(new_pn).strip(),
+                "multiplier": int(new_mult),
+                "items_per_order": int(new_ipo),
                 "current_qty": int(new_qty),
                 "sort_order": int(next_order),
             }])
