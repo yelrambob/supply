@@ -45,7 +45,7 @@ def get_smtp_config():
     s = st.secrets.get("smtp", {})
     host = s.get("server") or s.get("host")
     port = int(s.get("port", 465))
-    username = s.get("username") or s.get("user")
+    username = s.get("username") or s.get("user")  # handle "user" from secrets.toml
     password = (s.get("password") or "").replace(" ", "")
     mail_from = s.get("from") or username or ""
     subject_prefix = s.get("subject_prefix", "")
@@ -147,8 +147,6 @@ def read_log() -> pd.DataFrame:
             df[c] = pd.NA
     df["ordered_at"] = pd.to_datetime(df["ordered_at"], errors="coerce")
     df["qty"] = pd.to_numeric(df["qty"], errors="coerce").fillna(0).astype(int)
-    df["item"] = df["item"].astype(str)
-    df["product_number"] = df["product_number"].astype(str)
     return df[ORDER_LOG_COLUMNS].sort_values("ordered_at", ascending=False)
 
 def append_log(order_df: pd.DataFrame, orderer: str) -> str:
@@ -156,20 +154,9 @@ def append_log(order_df: pd.DataFrame, orderer: str) -> str:
     df = order_df.copy()
     df["ordered_at"] = now
     df["orderer"] = orderer
-    df["item"] = df["item"].astype(str)
-    df["product_number"] = df["product_number"].astype(str)
-    expected = ORDER_LOG_COLUMNS
-    df = df[expected]
+    df = df[ORDER_LOG_COLUMNS]
     prev = safe_read_csv(LOG_PATH)
-    if not prev.empty:
-        for c in expected:
-            if c not in prev.columns:
-                prev[c] = pd.NA
-        prev["item"] = prev["item"].astype(str)
-        prev["product_number"] = prev["product_number"].astype(str)
-        combined = pd.concat([prev[expected], df], ignore_index=True)
-    else:
-        combined = df
+    combined = pd.concat([prev, df], ignore_index=True) if not prev.empty else df
     combined.to_csv(LOG_PATH, index=False)
     return now
 
@@ -177,20 +164,12 @@ def read_last() -> pd.DataFrame:
     df = safe_read_csv(LAST_PATH)
     if df.empty:
         return pd.DataFrame(columns=LAST_ORDER_COLUMNS)
-    for c in LAST_ORDER_COLUMNS:
-        if c not in df.columns:
-            df[c] = pd.NA
-    df["qty"] = pd.to_numeric(df["qty"], errors="coerce").fillna(0).astype(int)
-    df["item"] = df["item"].astype(str)
-    df["product_number"] = df["product_number"].astype(str)
     return df[LAST_ORDER_COLUMNS]
 
 def write_last(df: pd.DataFrame, orderer: str):
     out = df.copy()
     out["generated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     out["orderer"] = orderer
-    out["item"] = out["item"].astype(str)
-    out["product_number"] = out["product_number"].astype(str)
     out = out[LAST_ORDER_COLUMNS]
     out.to_csv(LAST_PATH, index=False)
 
@@ -198,53 +177,26 @@ def last_info_map() -> pd.DataFrame:
     logs = read_log()
     if logs.empty:
         return pd.DataFrame(columns=["item","product_number","last_ordered_at","last_qty","last_orderer"])
-    logs = logs.copy()
-    logs["item"] = logs["item"].astype(str)
-    logs["product_number"] = logs["product_number"].astype(str)
-    logs = logs.sort_values("ordered_at")
     tail = logs.groupby(["item","product_number"], as_index=False).tail(1)
-    tail = tail.rename(columns={"ordered_at":"last_ordered_at","qty":"last_qty","orderer":"last_orderer"})
-    return tail[["item","product_number","last_ordered_at","last_qty","last_orderer"]]
+    return tail.rename(columns={"ordered_at":"last_ordered_at","qty":"last_qty","orderer":"last_orderer"})
 
 # ---------------- Emails CSV ----------------
 def read_emails() -> pd.DataFrame:
     df = safe_read_csv(EMAILS_PATH)
     if df.empty:
         return pd.DataFrame(columns=["name", "email"])
-
     df.columns = [str(c).strip().lower() for c in df.columns]
     email_re = re.compile(r'([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,})')
-
-    def extract_email(s: str) -> str:
-        s = str(s or "")
-        m = email_re.search(s)
-        return m.group(1) if m else ""
-
     out_rows = []
-    if "email" in df.columns:
-        name_col = "name" if "name" in df.columns else None
-        for _, r in df.iterrows():
-            email = extract_email(r.get("email", ""))
-            if email:
-                name = str(r.get(name_col, "")).strip() if name_col else ""
-                out_rows.append({"name": name, "email": email})
-    else:
-        first_col = df.columns[0]
-        for _, r in df.iterrows():
-            raw = str(r.get(first_col, ""))
-            parts = [p.strip() for p in re.split(r'[;,]\s*', raw) if p.strip()]
-            for p in parts:
-                email = extract_email(p)
-                if email:
-                    out_rows.append({"name": "", "email": email})
-
-    out = pd.DataFrame(out_rows)
-    return out.drop_duplicates(subset=["email"]).reset_index(drop=True)
+    for _, r in df.iterrows():
+        s = " ".join(str(x) for x in r if pd.notna(x))
+        m = email_re.search(s)
+        if m:
+            out_rows.append({"name": "", "email": m.group(1)})
+    return pd.DataFrame(out_rows).drop_duplicates(subset=["email"]).reset_index(drop=True)
 
 def all_recipients(emails_df: pd.DataFrame) -> list[str]:
-    if emails_df.empty:
-        return []
-    return sorted(emails_df["email"].astype(str).str.strip().unique().tolist())
+    return sorted(emails_df["email"].astype(str).unique().tolist()) if not emails_df.empty else []
 
 # ---------------- Persisted qty ----------------
 def qkey(item: str, pn: str) -> str:
@@ -271,13 +223,15 @@ st.caption(
 )
 
 with st.sidebar:
-    st.write("SMTP config:", get_smtp_config())
+    st.write("SMTP config loaded:", get_smtp_config())
 
 tabs = st.tabs(["Create Order", "Adjust Inventory", "Catalog", "Order Logs", "Tools"])
 
 # ---------- Create Order ----------
 with tabs[0]:
-    if not catalog.empty:
+    if catalog.empty:
+        st.info("No catalog found.")
+    else:
         c1, c2, c3 = st.columns([2, 2, 3])
         with c1:
             orderer = st.selectbox("Who is ordering?", people or ["(add names in people.txt)"], key="orderer")
@@ -290,6 +244,9 @@ with tabs[0]:
                 st.rerun()
 
         table = catalog.merge(last_info_map(), on=["item","product_number"], how="left")
+        if search:
+            table = table[table["item"].str.contains(search, case=False, na=False)]
+
         qty_map = st.session_state["qty_map"]
         table["qty"] = table.apply(lambda r: qty_map.get(qkey(r["item"], r["product_number"]), 0), axis=1)
 
@@ -299,20 +256,12 @@ with tabs[0]:
             hide_index=True,
             num_rows="dynamic",
             key=f"editor_{st.session_state['editor_key']}",
-            column_config={
-                "qty": st.column_config.NumberColumn("Qty", min_value=0, step=1),
-                "item": st.column_config.TextColumn("Item", disabled=True),
-                "product_number": st.column_config.TextColumn("Product #", disabled=True),
-                "last_ordered_at": st.column_config.DatetimeColumn("Last ordered", format="YYYY-MM-DD HH:mm", disabled=True),
-                "last_qty": st.column_config.NumberColumn("Last qty", disabled=True),
-                "last_orderer": st.column_config.TextColumn("Last by", disabled=True),
-            }
+            column_config={"qty": st.column_config.NumberColumn("Qty", min_value=0, step=1)},
         )
 
-        for idx, r in edited.iterrows():
-            key = qkey(r["item"], r["product_number"])
-            st.session_state["qty_map"][key] = int(r["qty"]) if pd.notna(r["qty"]) else 0
-        
+        # force sync
+        for _, r in edited.iterrows():
+            st.session_state["qty_map"][qkey(r["item"], r["product_number"])] = int(r["qty"]) if pd.notna(r["qty"]) else 0
 
         def _log_and_email(order_df: pd.DataFrame):
             when_str = append_log(order_df, orderer)
@@ -336,12 +285,7 @@ with tabs[0]:
 # ---------- Adjust Inventory ----------
 with tabs[1]:
     if not catalog.empty:
-        edited = st.data_editor(
-            catalog,
-            use_container_width=True,
-            hide_index=True,
-            key="inv_editor",
-        )
+        edited = st.data_editor(catalog, use_container_width=True, hide_index=True, key="inv_editor")
         if st.button("💾 Save inventory"):
             write_catalog(edited)
             st.success("Inventory saved.")
