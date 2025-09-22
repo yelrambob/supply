@@ -297,11 +297,54 @@ def all_recipients(emails_df: pd.DataFrame) -> list[str]:
 def qkey(item: str, pn: str) -> str:
     return f"{item}||{str(pn)}"
 
-if "qty_map" not in st.session_state:
-    st.session_state["qty_map"] = {}   # {(item||pn): int}
-if "orderer" not in st.session_state:
-    # Persist last chosen orderer across reruns
-    st.session_state["orderer"] = None
+        # Persistent qty prefill
+        qty_map = st.session_state["qty_map"]
+
+        # Prefill from last order only if map is empty
+        if not qty_map and not last_order_df.empty:
+            for _, r in last_order_df.iterrows():
+                qty_map[qkey(str(r["item"]), str(r["product_number"]))] = int(r["qty"])
+
+        def get_qty(row) -> int:
+            return int(qty_map.get(qkey(row["item"], row["product_number"]), 0))
+
+        table = table.copy()
+        table["qty"] = table.apply(get_qty, axis=1)
+
+        # Reset index so edits stick even after sort/filter
+        table = table.reset_index(drop=True)
+
+        show_cols = ["qty", "item", "product_number", "last_ordered_at", "last_qty", "last_orderer"]
+        
+        # Use a unique key for the data editor to prevent state conflicts
+        editor_key = f"order_editor_{hash(str(table[['item', 'product_number']].values.tolist()))}"
+        
+        edited = st.data_editor(
+            table[show_cols],
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "qty": st.column_config.NumberColumn("Qty", min_value=0, step=1),
+                "item": st.column_config.TextColumn("Item", disabled=True),
+                "product_number": st.column_config.TextColumn("Product #", disabled=True),
+                "last_ordered_at": st.column_config.DatetimeColumn("Last ordered", format="YYYY-MM-DD HH:mm", disabled=True),
+                "last_qty": st.column_config.NumberColumn("Last qty", disabled=True),
+                "last_orderer": st.column_config.TextColumn("Last by", disabled=True),
+            },
+            key=editor_key,
+        )
+
+        # Write back to qty_map (visible rows) - only update if values actually changed
+        for _, r in edited.iterrows():
+            k = qkey(str(r["item"]), str(r["product_number"]))
+            try:
+                new_qty = int(r["qty"]) if pd.notna(r["qty"]) else 0
+                # Only update if the value actually changed
+                if k not in qty_map or qty_map[k] != new_qty:
+                    qty_map[k] = new_qty
+            except Exception:
+                if k not in qty_map or qty_map[k] != 0:
+                    qty_map[k] = 0
 
 # ---------------- UI ----------------
 st.title("📦 Supply Ordering & Inventory Tracker")
