@@ -42,32 +42,32 @@ ensure_headers(LAST_PATH, LAST_ORDER_COLUMNS)
 
 # ---------------- SMTP ----------------
 def get_smtp_config():
-    """
-    Normalizes .streamlit/secrets.toml [smtp] into a single dict.
-    Supports both:
-      - server/username/password/from  (SSL on 465 by default)
-      - host/user/password/use_ssl/from/force_from_user/to (STARTTLS if use_ssl=false or port==587)
-    """
     s = st.secrets.get("smtp", {})
     host = s.get("server") or s.get("host")
     port = int(s.get("port", 465))
     username = s.get("username") or s.get("user")
-    # strip spaces in case a Gmail app password was pasted with spaces
     password = (s.get("password") or "").replace(" ", "")
     mail_from = s.get("from") or username or ""
     subject_prefix = s.get("subject_prefix", "")
-    default_to = s.get("to", "")
+    default_to_raw = s.get("to", "")  # <-- may be comma/semicolon separated
     force_from_user = bool(s.get("force_from_user", False))
 
-    # Decide SSL vs STARTTLS
     if "use_ssl" in s:
         use_ssl = bool(s.get("use_ssl"))
     else:
-        use_ssl = (port == 465)  # sensible default
+        use_ssl = (port == 465)
 
-    # For Gmail, From generally must be the authenticated user
     if force_from_user or ("gmail.com" in (username or "")):
         mail_from = username or mail_from
+
+    # Normalize default_to into a list
+    def _split_emails(txt: str) -> list[str]:
+        if not txt:
+            return []
+        parts = re.split(r'[;,]\s*', str(txt))
+        return [p.strip() for p in parts if p.strip()]
+
+    default_to = _split_emails(default_to_raw)
 
     return {
         "host": host,
@@ -76,7 +76,7 @@ def get_smtp_config():
         "password": password,
         "from": mail_from,
         "subject_prefix": subject_prefix,
-        "default_to": default_to,       # optional default recipients, comma-separated
+        "default_to": default_to,  # now a list
         "use_ssl": use_ssl,
     }
 
@@ -87,32 +87,30 @@ def smtp_ok() -> bool:
     return all(cfg.get(k) for k in required)
 
 
-def send_email(subject: str, body: str, to_emails: list[str]):
+def send_email(subject: str, body: str, to_emails: list[str] | None):
     cfg = get_smtp_config()
-    if not to_emails:
-        raise RuntimeError("No recipients provided.")
+    recipients = (to_emails or []) + cfg.get("default_to", [])
+    recipients = sorted({e for e in recipients if e and "@" in e})
+    if not recipients:
+        raise RuntimeError("No recipients provided (emails.csv empty and [smtp].to not set).")
 
     msg = EmailMessage()
-    if cfg["subject_prefix"]:
-        msg["Subject"] = f'{cfg["subject_prefix"]}{subject}'
-    else:
-        msg["Subject"] = subject
+    msg["Subject"] = f'{cfg["subject_prefix"]}{subject}' if cfg["subject_prefix"] else subject
     msg["From"] = cfg["from"]
-    msg["To"] = ", ".join(to_emails)
+    msg["To"] = ", ".join(recipients)
     msg.set_content(body)
 
     if cfg["use_ssl"]:
-        # SSL (e.g., Gmail 465)
         with smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=ssl.create_default_context()) as server:
             server.login(cfg["username"], cfg["password"])
             server.send_message(msg)
     else:
-        # STARTTLS (e.g., Gmail 587)
         with smtplib.SMTP(cfg["host"], cfg["port"]) as server:
             server.ehlo()
             server.starttls(context=ssl.create_default_context())
             server.login(cfg["username"], cfg["password"])
             server.send_message(msg)
+
 
 # ---------------- Load core data ----------------
 @st.cache_data
@@ -284,9 +282,17 @@ def read_emails() -> pd.DataFrame:
     return out[["name", "email"]]
 
 def all_recipients(emails_df: pd.DataFrame) -> list[str]:
-    if emails_df.empty:
-        return []
-    return sorted(emails_df["email"].astype(str).str.strip().unique().tolist())
+    cfg = get_smtp_config()
+    file_recipients = []
+    if not emails_df.empty:
+        file_recipients = (
+            emails_df["email"].astype(str).str.strip().tolist()
+        )
+    # union of emails.csv and secrets.to (so either will work after a reboot)
+    recipients = {e for e in file_recipients if e} | {e for e in cfg.get("default_to", []) if e}
+    # simple sanity filter
+    recipients = {e for e in recipients if "@" in e}
+    return sorted(recipients)
 
 # ---------------- Persisted qty (in-session) ----------------
 def qkey(item: str, pn: str) -> str:
