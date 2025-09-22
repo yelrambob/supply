@@ -501,11 +501,13 @@ with tabs[0]:
 
         def _log_and_email(order_df: pd.DataFrame, do_decrement: bool):
             orderer_local = st.session_state.get("orderer") or ""
+            
             # Save last generated (persists after reboot)
             write_last(order_df, orderer_local)
+            
             # Append to durable log CSV (persists after reboot)
             when_str = append_log(order_df, orderer_local)
-
+        
             # Decrement inventory if chosen
             if do_decrement:
                 cat2_local = catalog.copy()
@@ -515,7 +517,7 @@ with tabs[0]:
                         pd.to_numeric(cat2_local.loc[mask, "current_qty"], errors="coerce").fillna(0).astype(int) - int(r["qty"])
                     ).clip(lower=0)
                 write_catalog(cat2_local)
-
+        
             # Email everyone from emails.csv and/or secrets.to
             recipients = []
             if smtp_ok():
@@ -538,22 +540,13 @@ with tabs[0]:
                     st.info("No recipients found in emails.csv nor [smtp].to.")
             else:
                 st.info("Email disabled — fix .streamlit/secrets.toml [smtp].")
-
+        
             # Clear in-memory quantities after logging and refresh UI
             st.session_state["qty_map"] = {}
+            
+            # Force a complete page refresh to ensure the data editor reflects the cleared state
+            st.cache_data.clear()
             st.rerun()
-
-        with b1:
-            if st.button("🧾 Generate & Log Order", use_container_width=True, key="btn_log"):
-                selected = _selected_from_state()
-                if not selected.empty:
-                    _log_and_email(selected, do_decrement=False)
-
-        with b2:
-            if st.button("�� Generate, Log, & Decrement", use_container_width=True, key="btn_log_dec"):
-                selected = _selected_from_state()
-                if not selected.empty:
-                    _log_and_email(selected, do_decrement=True)
 
 # ---------- Adjust Inventory ----------
 with tabs[1]:
