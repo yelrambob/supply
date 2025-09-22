@@ -356,11 +356,12 @@ with tabs[0]:
             st.session_state["orderer"] = orderer
         with c2:
             search = st.text_input("Search items", key="order_search")
-        with c3:
-            if st.button("🧼 Clear quantities", use_container_width=True, key="btn_clear_qty"):
-                st.session_state["prefill_disabled"] = True
-                st.success("Cleared all quantities.")
-                st.rerun()
+        # adds a button to clear a quantity<<<<<<<<<doesn't actually work 
+        # with c3:
+        #     if st.button("🧼 Clear quantities", use_container_width=True, key="btn_clear_qty"):
+        #         st.session_state["prefill_disabled"] = True
+        #         st.success("Cleared all quantities.")
+        #         st.rerun()
 
         # Merge last-ordered info (force string keys both sides)
         last_map = last_info_map()
@@ -490,12 +491,12 @@ with tabs[0]:
                 selected = _selected_from_state()
                 if not selected.empty:
                     _log_and_email(selected, do_decrement=False)
-
-        with b2:
-            if st.button("�� Generate, Log, & Decrement", use_container_width=True, key="btn_log_dec"):
-                selected = _selected_from_state()
-                if not selected.empty:
-                    _log_and_email(selected, do_decrement=True)
+        # adds a button to removew things from the catalog<<<<<<<,very unnecessary    
+        # with b2:
+        #     if st.button("�� Generate, Log, & Decrement", use_container_width=True, key="btn_log_dec"):
+        #         selected = _selected_from_state()
+        #         if not selected.empty:
+        #             _log_and_email(selected, do_decrement=True)
 
 # ---------- Adjust Inventory ----------
 with tabs[1]:
