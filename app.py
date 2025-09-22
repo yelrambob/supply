@@ -414,7 +414,7 @@ with tabs[0]:
 
         show_cols = ["qty", "item", "product_number", "last_ordered_at", "last_qty", "last_orderer"]
         
-        # FIXED: Use a stable key that doesn't change on every rerun
+        # FIXED: Use a completely static key and handle state differently
         edited = st.data_editor(
             table[show_cols],
             use_container_width=True,
@@ -427,17 +427,22 @@ with tabs[0]:
                 "last_qty": st.column_config.NumberColumn("Last qty", disabled=True),
                 "last_orderer": st.column_config.TextColumn("Last by", disabled=True),
             },
-            key="order_editor",  # FIXED: Use a stable key
+            key="order_editor",  # Static key
         )
 
-        # FIXED: Update qty_map immediately when values change
-        for _, r in edited.iterrows():
-            k = qkey(str(r["item"]), str(r["product_number"]))
-            try:
-                new_qty = int(r["qty"]) if pd.notna(r["qty"]) else 0
-                qty_map[k] = new_qty  # Always update, no conditional check
-            except Exception:
-                qty_map[k] = 0
+        # FIXED: Only update qty_map when the data editor actually changes
+        # This prevents the double-input issue
+        if edited is not None and not edited.empty:
+            for _, r in edited.iterrows():
+                k = qkey(str(r["item"]), str(r["product_number"]))
+                try:
+                    new_qty = int(r["qty"]) if pd.notna(r["qty"]) else 0
+                    # Only update if different from current value
+                    if k not in qty_map or qty_map[k] != new_qty:
+                        qty_map[k] = new_qty
+                except Exception:
+                    if k not in qty_map or qty_map[k] != 0:
+                        qty_map[k] = 0
 
         # Buttons under the table
         b1, b2 = st.columns(2)
@@ -501,9 +506,8 @@ with tabs[0]:
             else:
                 st.info("Email disabled — fix .streamlit/secrets.toml [smtp].")
 
-            # FIXED: Clear quantities and force complete refresh
+            # Clear in-memory quantities after logging and refresh UI
             st.session_state["qty_map"] = {}
-            st.cache_data.clear()
             st.rerun()
 
         with b1:
