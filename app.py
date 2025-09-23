@@ -406,10 +406,7 @@ with tabs[0]:
 
         show_cols = ["qty", "item", "product_number", "multiplier", "items_per_order", "last_ordered_at", "last_qty", "last_orderer"]
         
-        # Use search term in the key to make it stable across searches
-        search_key = search or "all"
-        editor_key = f"order_editor_{search_key}"
-        
+        # Use a completely stable key that never changes
         edited = st.data_editor(
             table[show_cols],
             use_container_width=True,
@@ -424,7 +421,7 @@ with tabs[0]:
                 "last_qty": st.column_config.NumberColumn("Last qty", disabled=True),
                 "last_orderer": st.column_config.TextColumn("Last by", disabled=True),
             },
-            key=editor_key,
+            key="order_editor",
         )
 
         # Buttons under the table
