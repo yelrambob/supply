@@ -7,7 +7,7 @@ import re
 import smtplib, ssl
 from email.message import EmailMessage
 
-st.set_page_config(page_title="Supply Ordering", page_icon="", layout="wide")
+st.set_page_config(page_title="Supply Ordering", page_icon="��", layout="wide")
 
 # ---------------- Paths ----------------
 APP_DIR = Path(__file__).resolve().parent
@@ -301,13 +301,9 @@ def all_recipients(emails_df: pd.DataFrame) -> list[str]:
 if "orderer" not in st.session_state:
     st.session_state["orderer"] = None
 
-# Simple quantity storage - just a dict
-if "quantities" not in st.session_state:
-    st.session_state["quantities"] = {}
-
-# Helper function to create unique keys
-def qkey(item: str, pn: str) -> str:
-    return f"{item}||{str(pn)}"
+# NEW: Flag to prevent prefill after logging
+if "prefill_disabled" not in st.session_state:
+    st.session_state["prefill_disabled"] = False
 
 # ---------------- UI ----------------
 st.title("📦 Supply Ordering & Inventory Tracker")
@@ -362,7 +358,7 @@ with tabs[0]:
             search = st.text_input("Search items", key="order_search")
         with c3:
             if st.button("🧼 Clear quantities", use_container_width=True, key="btn_clear_qty"):
-                st.session_state["quantities"] = {}
+                st.session_state["prefill_disabled"] = True
                 st.success("Cleared all quantities.")
                 st.rerun()
 
@@ -401,25 +397,17 @@ with tabs[0]:
         if search:
             table = table[table["item"].str.contains(search, case=False, na=False)]
 
-        # Prepare UI columns with persistent quantities
+        # Prepare UI columns - KEY DIFFERENCE: Direct DataFrame manipulation like old code
         table["last_qty"] = pd.to_numeric(table.get("last_qty"), errors="coerce")
-        
-        # Get quantities from session state
-        quantities = st.session_state["quantities"]
-        
-        # Apply stored quantities to the table
-        for i, r in table.iterrows():
-            key = qkey(str(r["item"]), str(r["product_number"]))
-            table.at[i, "qty"] = quantities.get(key, 0)
+        table["qty"] = 0
 
-        # Prefill qty from last generated order (only if no quantities stored yet)
-        if not quantities and not last_order_df.empty:
+        # Prefill qty from last generated order (optional convenience) - ONLY if not disabled
+        if not last_order_df.empty and not st.session_state.get("prefill_disabled", False):
             prev_map = {(r["item"], str(r["product_number"])): int(r["qty"]) for _, r in last_order_df.iterrows()}
             for i, r in table.iterrows():
-                key = qkey(str(r["item"]), str(r["product_number"]))
-                if (r["item"], str(r["product_number"])) in prev_map:
-                    quantities[key] = int(prev_map[(r["item"], str(r["product_number"]))])
-                    table.at[i, "qty"] = quantities[key]
+                key = (r["item"], str(r["product_number"]))
+                if key in prev_map:
+                    table.at[i, "qty"] = int(prev_map[key])
 
         show_cols = ["qty", "item", "product_number", "multiplier", "items_per_order", "last_ordered_at", "last_qty", "last_orderer"]
         edited = st.data_editor(
@@ -439,37 +427,18 @@ with tabs[0]:
             key="order_editor",
         )
 
-        # Update session state with any changes from the data editor
-        if edited is not None and not edited.empty:
-            for _, r in edited.iterrows():
-                key = qkey(str(r["item"]), str(r["product_number"]))
-                try:
-                    new_qty = int(r["qty"]) if pd.notna(r["qty"]) else 0
-                    quantities[key] = new_qty
-                except Exception:
-                    quantities[key] = 0
-
         # Buttons under the table
         b1, b2 = st.columns(2)
 
         def _selected_from_state() -> pd.DataFrame:
-            # Get all items with quantities > 0 from session state
-            rows = []
-            for key, qty in quantities.items():
-                if qty and qty > 0:
-                    item, pn = key.split("||", 1)
-                    # Verify the item exists in catalog
-                    if any((str(c["item"]) == item and str(c["product_number"]) == pn) for _, c in catalog.iterrows()):
-                        rows.append({"item": item, "product_number": pn, "qty": int(qty)})
-            
-            df = pd.DataFrame(rows)
-            if df.empty:
+            chosen = edited[edited["qty"] > 0].copy()
+            if chosen.empty:
                 st.error("Please set Qty > 0 for at least one item.")
                 return pd.DataFrame()
             if not people or st.session_state.get("orderer") == "(add names in data/people.txt)":
                 st.error("Please add/select an orderer in data/people.txt.")
                 return pd.DataFrame()
-            return df
+            return chosen[["item", "product_number", "qty"]].copy()
 
         def _log_and_email(order_df: pd.DataFrame, do_decrement: bool):
             orderer_local = st.session_state.get("orderer") or ""
@@ -512,8 +481,8 @@ with tabs[0]:
             else:
                 st.info("Email disabled — fix .streamlit/secrets.toml [smtp].")
 
-            # Clear quantities after logging
-            st.session_state["quantities"] = {}
+            # Clear quantities by disabling prefill and forcing rerun
+            st.session_state["prefill_disabled"] = True
             st.rerun()
 
         with b1:
@@ -523,7 +492,7 @@ with tabs[0]:
                     _log_and_email(selected, do_decrement=False)
 
         with b2:
-            if st.button(" Generate, Log, & Decrement", use_container_width=True, key="btn_log_dec"):
+            if st.button("�� Generate, Log, & Decrement", use_container_width=True, key="btn_log_dec"):
                 selected = _selected_from_state()
                 if not selected.empty:
                     _log_and_email(selected, do_decrement=True)
@@ -638,7 +607,7 @@ with tabs[4]:
         if st.button("🧨 Clear ALL selected info", type="primary", disabled=not confirm, key="btn_clear_all"):
             try:
                 if opt_qty:
-                    st.session_state["quantities"] = {}
+                    st.session_state["prefill_disabled"] = True
                 if opt_last:
                     pd.DataFrame(columns=LAST_ORDER_COLUMNS).to_csv(LAST_PATH, index=False)
                 if opt_logs:
