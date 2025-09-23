@@ -19,7 +19,6 @@ LOG_PATH     = DATA_DIR / "order_log.csv"
 LAST_PATH    = DATA_DIR / "last_order.csv"
 PEOPLE_PATH  = DATA_DIR / "people.txt"
 EMAILS_PATH  = DATA_DIR / "emails.csv"
-QUANTITIES_PATH = DATA_DIR / "quantities.csv"  # NEW: Persistent storage for quantities
 
 ORDER_LOG_COLUMNS = ["item", "product_number", "qty", "ordered_at", "orderer"]
 LAST_ORDER_COLUMNS = ["item", "product_number", "qty", "generated_at", "orderer"]
@@ -49,34 +48,6 @@ def ensure_headers(path: Path, columns: list[str]):
 
 ensure_headers(LOG_PATH, ORDER_LOG_COLUMNS)
 ensure_headers(LAST_PATH, LAST_ORDER_COLUMNS)
-
-# ---------------- NEW: Persistent quantity storage ----------------
-def load_quantities() -> dict:
-    """Load quantities from persistent storage."""
-    df = safe_read_csv(QUANTITIES_PATH)
-    if df.empty:
-        return {}
-    
-    quantities = {}
-    for _, row in df.iterrows():
-        key = f"{row['item']}||{row['product_number']}"
-        quantities[key] = int(row['qty'])
-    return quantities
-
-def save_quantities(quantities: dict):
-    """Save quantities to persistent storage."""
-    rows = []
-    for key, qty in quantities.items():
-        if qty > 0:  # Only save non-zero quantities
-            item, product_number = key.split("||", 1)
-            rows.append({
-                "item": item,
-                "product_number": product_number,
-                "qty": qty
-            })
-    
-    df = pd.DataFrame(rows)
-    df.to_csv(QUANTITIES_PATH, index=False)
 
 # ---------------- SMTP ----------------
 def _split_emails(txt: str) -> list[str]:
@@ -330,10 +301,6 @@ def all_recipients(emails_df: pd.DataFrame) -> list[str]:
 if "orderer" not in st.session_state:
     st.session_state["orderer"] = None
 
-# Helper function to create unique keys
-def qkey(item: str, pn: str) -> str:
-    return f"{item}||{str(pn)}"
-
 # ---------------- UI ----------------
 st.title("📦 Supply Ordering & Inventory Tracker")
 
@@ -342,9 +309,6 @@ emails_df = read_emails()
 catalog = read_catalog()
 logs = read_log()
 last_order_df = read_last()
-
-# Load persistent quantities
-quantities = load_quantities()
 
 email_ready = "✅" if smtp_ok() else "❌"
 st.caption(
@@ -390,8 +354,6 @@ with tabs[0]:
             search = st.text_input("Search items", key="order_search")
         with c3:
             if st.button("🧼 Clear quantities", use_container_width=True, key="btn_clear_qty"):
-                quantities = {}
-                save_quantities(quantities)
                 st.success("Cleared all quantities.")
                 st.rerun()
 
@@ -426,33 +388,28 @@ with tabs[0]:
             key = table["last_ordered_at"].fillna(pd.Timestamp("1900-01-01"))
             table = table.iloc[key.sort_values(ascending=False).index]
 
-        # Search filter - APPLY BEFORE SETTING QUANTITIES
+        # Search filter
         if search:
             table = table[table["item"].str.contains(search, case=False, na=False)]
 
-        # Prepare UI columns - NOW SET QUANTITIES AFTER FILTERING
+        # Prepare UI columns - SIMPLE: Just set qty to 0 and let data editor handle it
         table["last_qty"] = pd.to_numeric(table.get("last_qty"), errors="coerce")
         table["qty"] = 0
 
-        # Apply stored quantities from persistent storage
-        for i, r in table.iterrows():
-            key = qkey(str(r["item"]), str(r["product_number"]))
-            table.at[i, "qty"] = quantities.get(key, 0)
-
-        # Prefill qty from last generated order (only if no quantities stored yet)
-        if not quantities and not last_order_df.empty:
+        # Prefill qty from last generated order (optional convenience)
+        if not last_order_df.empty:
             prev_map = {(r["item"], str(r["product_number"])): int(r["qty"]) for _, r in last_order_df.iterrows()}
             for i, r in table.iterrows():
-                key = qkey(str(r["item"]), str(r["product_number"]))
-                if (r["item"], str(r["product_number"])) in prev_map:
-                    quantities[key] = int(prev_map[(r["item"], str(r["product_number"]))])
-                    table.at[i, "qty"] = quantities[key]
-            # Save the prefilled quantities
-            save_quantities(quantities)
+                key = (r["item"], str(r["product_number"]))
+                if key in prev_map:
+                    table.at[i, "qty"] = int(prev_map[key])
 
         show_cols = ["qty", "item", "product_number", "multiplier", "items_per_order", "last_ordered_at", "last_qty", "last_orderer"]
         
-        # Use a completely stable key that never changes
+        # Use search term in the key to make it stable across searches
+        search_key = search or "all"
+        editor_key = f"order_editor_{search_key}"
+        
         edited = st.data_editor(
             table[show_cols],
             use_container_width=True,
@@ -467,49 +424,21 @@ with tabs[0]:
                 "last_qty": st.column_config.NumberColumn("Last qty", disabled=True),
                 "last_orderer": st.column_config.TextColumn("Last by", disabled=True),
             },
-            key="order_editor_persistent",
+            key=editor_key,
         )
-
-        # Update persistent storage with any changes from the data editor
-        if edited is not None and not edited.empty:
-            quantities_updated = False
-            for _, r in edited.iterrows():
-                key = qkey(str(r["item"]), str(r["product_number"]))
-                try:
-                    new_qty = int(r["qty"]) if pd.notna(r["qty"]) else 0
-                    if quantities.get(key, 0) != new_qty:
-                        quantities[key] = new_qty
-                        quantities_updated = True
-                except Exception:
-                    if quantities.get(key, 0) != 0:
-                        quantities[key] = 0
-                        quantities_updated = True
-            
-            # Save quantities if they changed
-            if quantities_updated:
-                save_quantities(quantities)
 
         # Buttons under the table
         b1, b2 = st.columns(2)
 
         def _selected_from_state() -> pd.DataFrame:
-            # Get all items with quantities > 0 from persistent storage
-            rows = []
-            for key, qty in quantities.items():
-                if qty and qty > 0:
-                    item, pn = key.split("||", 1)
-                    # Verify the item exists in catalog
-                    if any((str(c["item"]) == item and str(c["product_number"]) == pn) for _, c in catalog.iterrows()):
-                        rows.append({"item": item, "product_number": pn, "qty": int(qty)})
-            
-            df = pd.DataFrame(rows)
-            if df.empty:
+            chosen = edited[edited["qty"] > 0].copy()
+            if chosen.empty:
                 st.error("Please set Qty > 0 for at least one item.")
                 return pd.DataFrame()
             if not people or st.session_state.get("orderer") == "(add names in data/people.txt)":
                 st.error("Please add/select an orderer in data/people.txt.")
                 return pd.DataFrame()
-            return df
+            return chosen[["item", "product_number", "qty"]].copy()
 
         def _log_and_email(order_df: pd.DataFrame, do_decrement: bool):
             orderer_local = st.session_state.get("orderer") or ""
@@ -552,9 +481,7 @@ with tabs[0]:
             else:
                 st.info("Email disabled — fix .streamlit/secrets.toml [smtp].")
 
-            # Clear quantities after logging
-            quantities = {}
-            save_quantities(quantities)
+            # Clear quantities by forcing rerun
             st.rerun()
 
         with b1:
@@ -664,15 +591,13 @@ with tabs[4]:
     st.subheader("⚠️ Tools (Danger Zone)")
     st.write("Choose what to clear. This **does not** touch your catalog, people, or emails.")
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3 = st.columns(3)
     with col1:
         opt_qty = st.checkbox("Clear on-screen quantities", value=True, key="clear_qty_map")
     with col2:
         opt_last = st.checkbox("Clear last generated order", value=True, key="clear_last")
     with col3:
         opt_logs = st.checkbox("Clear order logs", value=True, key="clear_logs")
-    with col4:
-        opt_quantities_file = st.checkbox("Clear quantities file", value=True, key="clear_quantities_file")
 
     confirm = st.checkbox("I understand this action cannot be undone.", key="clear_confirm")
 
@@ -680,11 +605,6 @@ with tabs[4]:
     with c1:
         if st.button("🧨 Clear ALL selected info", type="primary", disabled=not confirm, key="btn_clear_all"):
             try:
-                if opt_qty:
-                    quantities = {}
-                    save_quantities(quantities)
-                if opt_quantities_file and QUANTITIES_PATH.exists():
-                    QUANTITIES_PATH.unlink()
                 if opt_last:
                     pd.DataFrame(columns=LAST_ORDER_COLUMNS).to_csv(LAST_PATH, index=False)
                 if opt_logs:
