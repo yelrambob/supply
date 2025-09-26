@@ -131,6 +131,7 @@ def write_catalog(df: pd.DataFrame):
     df.to_csv(CATALOG_PATH, index=False)
 
 # ---------------- Supabase data helpers ----------------
+
 def append_log(order_df: pd.DataFrame, orderer: str) -> str:
     now = datetime.now().isoformat(sep=" ", timespec="seconds")
     rows = []
@@ -146,6 +147,7 @@ def append_log(order_df: pd.DataFrame, orderer: str) -> str:
     if res.error:
         st.error(f"Supabase insert error: {res.error}")
     return now
+
 
 def read_log() -> pd.DataFrame:
     res = supabase.table("orders_log").select("*").order("ordered_at", desc=True).execute()
