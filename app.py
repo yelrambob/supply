@@ -153,25 +153,13 @@ def read_log() -> pd.DataFrame:
         return pd.DataFrame(columns=["item","product_number","qty","ordered_at","orderer"])
     return pd.DataFrame(res.data)
 
-def write_last(order_df: pd.DataFrame, orderer: str):
-    now = datetime.now().isoformat(sep=" ", timespec="seconds")
-    supabase.table("last_order").delete().neq("id", 0).execute()
-    rows = []
-    for _, r in order_df.iterrows():
-        rows.append({
-            "item": r["item"],
-            "product_number": str(r["product_number"]),
-            "qty": int(r["qty"]),
-            "generated_at": now,
-            "orderer": orderer
-        })
-    supabase.table("last_order").insert(rows).execute()
-
 def read_last() -> pd.DataFrame:
-    res = supabase.table("last_order").select("*").order("generated_at", desc=True).execute()
-    if not res.data:
-        return pd.DataFrame(columns=["item","product_number","qty","generated_at","orderer"])
-    return pd.DataFrame(res.data)
+    """Return the most recent order batch."""
+    logs = read_log()
+    if logs.empty:
+        return pd.DataFrame(columns=["item","product_number","qty","ordered_at","orderer"])
+    last_time = logs["ordered_at"].max()
+    return logs[logs["ordered_at"] == last_time]
 
 # ---------------- Emails CSV ----------------
 @st.cache_data
@@ -263,7 +251,6 @@ with tabs[0]:
         selected = edited[edited["qty"] > 0]
         if st.button("🧾 Generate & Log Order"):
             if not selected.empty:
-                write_last(selected, orderer)
                 when_str = append_log(selected, orderer)
                 if smtp_ok():
                     recipients = all_recipients(emails_df)
@@ -277,3 +264,49 @@ with tabs[0]:
                             st.error(f"Email failed: {e}")
                 st.session_state["qty_map"] = {}
                 st.rerun()
+
+# ---------- Adjust Inventory ----------
+with tabs[1]:
+    if catalog.empty:
+        st.info("No catalog found.")
+    else:
+        st.write("Adjust `current_qty` or `sort_order`, then save.")
+        editable = catalog.copy().reset_index(drop=True)
+        edited = st.data_editor(
+            editable,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "item": st.column_config.TextColumn("Item", disabled=True),
+                "product_number": st.column_config.TextColumn("Product #", disabled=True),
+                "multiplier": st.column_config.NumberColumn("Multiplier", min_value=1, step=1),
+                "items_per_order": st.column_config.NumberColumn("Items/Order", min_value=1, step=1),
+                "current_qty": st.column_config.NumberColumn("Current Qty", min_value=0, step=1),
+                "sort_order": st.column_config.NumberColumn("Sort order", min_value=0, step=1),
+            },
+            key="inventory_editor",
+        )
+        if st.button("💾 Save inventory changes"):
+            write_catalog(edited)
+            st.success("Inventory saved.")
+
+# ---------- Catalog ----------
+with tabs[2]:
+    st.caption("Catalog source: data/catalog.csv")
+    if catalog.empty:
+        st.info("No catalog found.")
+    else:
+        st.dataframe(catalog, use_container_width=True, hide_index=True)
+
+# ---------- Order Logs ----------
+with tabs[3]:
+    if logs.empty:
+        st.info("No orders logged yet.")
+    else:
+        st.dataframe(logs, use_container_width=True, hide_index=True)
+        st.download_button(
+            "⬇️ Download full log (CSV)",
+            data=logs.to_csv(index=False).encode("utf-8"),
+            file_name="order_log.csv",
+            mime="text/csv",
+        )
