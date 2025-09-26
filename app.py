@@ -142,27 +142,28 @@ def append_log(order_df: pd.DataFrame, orderer: str) -> str:
             "ordered_at": now,
             "orderer": orderer
         })
-
-    res = supabase.table("orders_log").insert(rows).execute()
-
-    # Debug-safe reporting
-    st.write("Supabase insert response:", res.__dict__ if hasattr(res, "__dict__") else res)
-
+    supabase.table("orders_log").insert(rows).execute()
     return now
 
 def read_log() -> pd.DataFrame:
     res = supabase.table("orders_log").select("*").order("ordered_at", desc=True).execute()
-    st.write("Supabase read_log response:", res.__dict__ if hasattr(res, "__dict__") else res)
     if not getattr(res, "data", None):
         return pd.DataFrame(columns=["item","product_number","qty","ordered_at","orderer"])
     return pd.DataFrame(res.data)
 
-def read_last() -> pd.DataFrame:
+def last_info_map() -> pd.DataFrame:
+    """Return last order info per item/product_number."""
     logs = read_log()
     if logs.empty:
-        return pd.DataFrame(columns=["item","product_number","qty","ordered_at","orderer"])
-    last_time = logs["ordered_at"].max()
-    return logs[logs["ordered_at"] == last_time]
+        return pd.DataFrame(columns=["item","product_number","last_ordered_at","last_qty","last_orderer"])
+    logs = logs.copy()
+    logs["ordered_at"] = pd.to_datetime(logs["ordered_at"], errors="coerce")
+    tail = logs.sort_values("ordered_at").groupby(["item","product_number"], as_index=False).tail(1)
+    return tail.rename(columns={
+        "ordered_at": "last_ordered_at",
+        "qty": "last_qty",
+        "orderer": "last_orderer"
+    })[["item","product_number","last_ordered_at","last_qty","last_orderer"]]
 
 # ---------------- Emails CSV ----------------
 @st.cache_data
@@ -200,7 +201,6 @@ people = read_people()
 emails_df = read_emails()
 catalog = read_catalog()
 logs = read_log()
-last_order_df = read_last()
 
 email_ready = "✅" if smtp_ok() else "❌"
 st.caption(f"Loaded {len(catalog)} catalog rows • {len(logs)} log rows • Email configured: {email_ready}")
@@ -221,7 +221,12 @@ with tabs[0]:
         with c2:
             search = st.text_input("Search items")
 
-        table = catalog.copy()
+        # Merge catalog with last order info
+        last_map = last_info_map()
+        table = catalog.merge(last_map, on=["item","product_number"], how="left")
+        table["last_ordered_at"] = pd.to_datetime(table["last_ordered_at"], errors="coerce")
+
+        # Fill qty from session
         table["product_number"] = table["product_number"].astype(str)
         table["qty"] = table["product_number"].map(st.session_state["qty_map"]).fillna(0).astype(int)
 
@@ -232,7 +237,11 @@ with tabs[0]:
         table["_row_key"] = table["product_number"]
 
         edited = st.data_editor(
-            table[["qty", "item", "product_number", "multiplier", "items_per_order", "current_qty"]],
+            table[[
+                "qty", "item", "product_number", "multiplier",
+                "items_per_order", "current_qty",
+                "last_ordered_at", "last_qty", "last_orderer"
+            ]],
             use_container_width=True,
             hide_index=True,
             column_config={
@@ -242,6 +251,9 @@ with tabs[0]:
                 "multiplier": st.column_config.NumberColumn("Multiplier", disabled=True),
                 "items_per_order": st.column_config.NumberColumn("Items/Order", disabled=True),
                 "current_qty": st.column_config.NumberColumn("Current Qty", disabled=True),
+                "last_ordered_at": st.column_config.DatetimeColumn("Last ordered", format="YYYY-MM-DD HH:mm", disabled=True),
+                "last_qty": st.column_config.NumberColumn("Last qty", disabled=True),
+                "last_orderer": st.column_config.TextColumn("Last by", disabled=True),
             },
             key="order_editor",
         )
