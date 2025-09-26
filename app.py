@@ -131,7 +131,6 @@ def write_catalog(df: pd.DataFrame):
     df.to_csv(CATALOG_PATH, index=False)
 
 # ---------------- Supabase data helpers ----------------
-
 def append_log(order_df: pd.DataFrame, orderer: str) -> str:
     now = datetime.now().isoformat(sep=" ", timespec="seconds")
     rows = []
@@ -143,26 +142,22 @@ def append_log(order_df: pd.DataFrame, orderer: str) -> str:
             "ordered_at": now,
             "orderer": orderer
         })
+
     res = supabase.table("orders_log").insert(rows).execute()
 
-    # Debugging output
-    if res.error:
-        st.error(f"Supabase insert error: {res.error}")
-    else:
-        st.success(f"Inserted {len(res.data)} row(s) into orders_log")
-        st.json(res.data)
+    # Debug-safe reporting
+    st.write("Supabase insert response:", res.__dict__ if hasattr(res, "__dict__") else res)
 
     return now
 
-
 def read_log() -> pd.DataFrame:
     res = supabase.table("orders_log").select("*").order("ordered_at", desc=True).execute()
-    if not res.data:
+    st.write("Supabase read_log response:", res.__dict__ if hasattr(res, "__dict__") else res)
+    if not getattr(res, "data", None):
         return pd.DataFrame(columns=["item","product_number","qty","ordered_at","orderer"])
     return pd.DataFrame(res.data)
 
 def read_last() -> pd.DataFrame:
-    """Return the most recent order batch."""
     logs = read_log()
     if logs.empty:
         return pd.DataFrame(columns=["item","product_number","qty","ordered_at","orderer"])
@@ -196,7 +191,7 @@ def all_recipients(emails_df: pd.DataFrame) -> list[str]:
 if "orderer" not in st.session_state:
     st.session_state["orderer"] = None
 if "qty_map" not in st.session_state:
-    st.session_state["qty_map"] = {}  # {product_number: qty}
+    st.session_state["qty_map"] = {}
 
 # ---------------- UI ----------------
 st.title("📦 Supply Ordering & Inventory Tracker")
@@ -226,7 +221,6 @@ with tabs[0]:
         with c2:
             search = st.text_input("Search items")
 
-        # Build table with stable keys
         table = catalog.copy()
         table["product_number"] = table["product_number"].astype(str)
         table["qty"] = table["product_number"].map(st.session_state["qty_map"]).fillna(0).astype(int)
@@ -252,7 +246,6 @@ with tabs[0]:
             key="order_editor",
         )
 
-        # Save edits back into session qty_map
         for _, r in edited.iterrows():
             st.session_state["qty_map"][str(r["product_number"])] = int(r["qty"])
 
