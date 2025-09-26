@@ -1,9 +1,9 @@
 item,product_number,multiplier,items_per_order
-Xtra Small Nitrile Gloves,179887
-Small Nitrile Gloves,48730
-Medium Nitrile Gloves,48731
-Large Nitrile Gloves,48732
-Xtra Large Nitrile Gloves,48734
+Xtra Small Nitrile Gloves,179887,10,1
+Small Nitrile Gloves,48730,10,1
+Medium Nitrile Gloves,48731,10,1
+Large Nitrile Gloves,48732,10,1
+Xtra Large Nitrile Gloves,48734,10,1
 6 gloves ,65694
 6-1/2 gloves,20711
 7 gloves,20712
@@ -16,7 +16,7 @@ Alcohol wipes ,518
 Green IV swabs Prevantics,162051
 Small Tegaderms,21092
 Large Tegaderms,592
-Coban Multicolor,222560
+Coban Multicolor,222560,1,1
 safety scalpel,62821
 Scalpel,326
 Bandaids ,508
@@ -174,13 +174,13 @@ Omnipaque 350mg 100ml ,162069
 Omnipaque 300mg 100ml ,1686
 Visipaque ,97619
 Optiray 320mg ,39346
-50ml Saline (84),23080
-100ml Saline (64),23081
+50ml Saline (84),23080,84,1
+100ml Saline (64),23081,64,1
 150ml Saline,23074
 250ml Saline,23075
 500ml Saline,23077
 Sterile Saline Flush Syringe,109030
-Saline Flush 10 ml Syringe,64305
+Saline Flush 10 ml Syringe,64305,16,1
 0.9% sodium chloride 10ml,24139
 Sweet Ease ,63068
 Lifepak paper,104257
