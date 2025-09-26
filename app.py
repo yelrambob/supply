@@ -144,8 +144,14 @@ def append_log(order_df: pd.DataFrame, orderer: str) -> str:
             "orderer": orderer
         })
     res = supabase.table("orders_log").insert(rows).execute()
+
+    # Debugging output
     if res.error:
         st.error(f"Supabase insert error: {res.error}")
+    else:
+        st.success(f"Inserted {len(res.data)} row(s) into orders_log")
+        st.json(res.data)
+
     return now
 
 
