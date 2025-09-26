@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from pandas.errors import EmptyDataError
+import zoneinfo  # Python 3.9+
 from datetime import datetime
 from pathlib import Path
 import re
@@ -9,6 +10,10 @@ from email.message import EmailMessage
 from supabase import create_client
 
 st.set_page_config(page_title="Supply Ordering", page_icon="📦", layout="wide")
+
+NYC = zoneinfo.ZoneInfo("America/New_York")
+
+now = datetime.now(NYC).strftime("%Y-%m-%d %H:%M:%S")
 
 # ---------------- Paths ----------------
 APP_DIR = Path(__file__).resolve().parent
@@ -132,7 +137,7 @@ def write_catalog(df: pd.DataFrame):
 
 # ---------------- Supabase data helpers ----------------
 def append_log(order_df: pd.DataFrame, orderer: str) -> str:
-    now = datetime.now().isoformat(sep=" ", timespec="seconds")
+    now = datetime.now(NYC).isoformat(sep=" ", timespec="seconds")
     rows = []
     for _, r in order_df.iterrows():
         rows.append({
