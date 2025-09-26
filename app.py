@@ -224,12 +224,19 @@ with tabs[0]:
         # Merge catalog with last order info
         last_map = last_info_map()
         table = catalog.merge(last_map, on=["item","product_number"], how="left")
+        
+        # Ensure columns always exist
+        for c in ["last_ordered_at", "last_qty", "last_orderer"]:
+            if c not in table.columns:
+                table[c] = pd.NA
+        
+        # Parse datetime
         table["last_ordered_at"] = pd.to_datetime(table["last_ordered_at"], errors="coerce")
         
-        # Default sort: most recent first, then by item name
+        # Default sort: most recent first
         table = table.sort_values(
-            ["last_ordered_at", "item"], 
-            ascending=[False, True], 
+            ["last_ordered_at", "item"],
+            ascending=[False, True],
             na_position="last"
         ).reset_index(drop=True)
 
