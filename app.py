@@ -164,39 +164,27 @@ def write_catalog(df: pd.DataFrame):
     df.to_csv(CATALOG_PATH, index=False)
 
 def read_log() -> pd.DataFrame:
-    df = safe_read_csv(LOG_PATH)
-    if df.empty:
-        return pd.DataFrame(columns=ORDER_LOG_COLUMNS)
-    for c in ORDER_LOG_COLUMNS:
-        if c not in df.columns:
-            df[c] = pd.NA
-    df["ordered_at"] = pd.to_datetime(df["ordered_at"], errors="coerce")
-    df["qty"] = pd.to_numeric(df["qty"], errors="coerce").fillna(0).astype(int)
-    df["item"] = df["item"].astype(str)
-    df["product_number"] = df["product_number"].astype(str)
-    return df[ORDER_LOG_COLUMNS].sort_values("ordered_at", ascending=False)
+    supabase = get_supabase()
+    res = supabase.table("orders_log").select("*").order("ordered_at", desc=True).execute()
+    if not res.data:
+        return pd.DataFrame(columns=["item","product_number","qty","ordered_at","orderer"])
+    return pd.DataFrame(res.data)
 
 def append_log(order_df: pd.DataFrame, orderer: str) -> str:
+    supabase = get_supabase()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    df = order_df.copy()
-    df["ordered_at"] = now
-    df["orderer"] = orderer
-    df["item"] = df["item"].astype(str)
-    df["product_number"] = df["product_number"].astype(str)
-    expected = ORDER_LOG_COLUMNS
 
-    prev = safe_read_csv(LOG_PATH)
-    if not prev.empty:
-        for c in expected:
-            if c not in prev.columns:
-                prev[c] = pd.NA
-        prev["item"] = prev["item"].astype(str)
-        prev["product_number"] = prev["product_number"].astype(str)
-        combined = pd.concat([prev[expected], df[expected]], ignore_index=True)
-    else:
-        combined = df[expected]
+    rows = []
+    for _, r in order_df.iterrows():
+        rows.append({
+            "item": r["item"],
+            "product_number": str(r["product_number"]),
+            "qty": int(r["qty"]),
+            "ordered_at": now,
+            "orderer": orderer
+        })
 
-    combined.to_csv(LOG_PATH, index=False)
+    supabase.table("orders_log").insert(rows).execute()
     return now
 
 def read_last() -> pd.DataFrame:
