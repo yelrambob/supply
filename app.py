@@ -6,6 +6,14 @@ from pathlib import Path
 import re
 import smtplib, ssl
 from email.message import EmailMessage
+from supabase import create_client
+
+def get_supabase():
+    url = st.secrets["supabase"]["url"]
+    key = st.secrets["supabase"]["key"]
+    return create_client(url, key)
+
+supabase = get_supabase()
 
 st.set_page_config(page_title="Supply Ordering", page_icon="", layout="wide")
 
