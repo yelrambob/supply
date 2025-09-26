@@ -224,27 +224,27 @@ with tabs[0]:
         # Merge catalog with last order info
         last_map = last_info_map()
         table = catalog.merge(last_map, on=["item","product_number"], how="left")
-        
-        # Ensure columns always exist
+
+        # Ensure last_* columns always exist
         for c in ["last_ordered_at", "last_qty", "last_orderer"]:
             if c not in table.columns:
                 table[c] = pd.NA
-        
-        # Parse datetime
+
+        # Parse datetime and sort by most recent order first
         table["last_ordered_at"] = pd.to_datetime(table["last_ordered_at"], errors="coerce")
-        
-        # Default sort: most recent first
         table = table.sort_values(
             ["last_ordered_at", "item"],
             ascending=[False, True],
             na_position="last"
         ).reset_index(drop=True)
 
+        # Fill qty from session
+        table["product_number"] = table["product_number"].astype(str)
+        table["qty"] = table["product_number"].map(st.session_state["qty_map"]).fillna(0).astype(int)
 
         if search:
             table = table[table["item"].str.contains(search, case=False, na=False)]
 
-        table = table.reset_index(drop=True)
         table["_row_key"] = table["product_number"]
 
         edited = st.data_editor(
