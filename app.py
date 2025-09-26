@@ -225,10 +225,14 @@ with tabs[0]:
         last_map = last_info_map()
         table = catalog.merge(last_map, on=["item","product_number"], how="left")
         table["last_ordered_at"] = pd.to_datetime(table["last_ordered_at"], errors="coerce")
+        
+        # Default sort: most recent first, then by item name
+        table = table.sort_values(
+            ["last_ordered_at", "item"], 
+            ascending=[False, True], 
+            na_position="last"
+        ).reset_index(drop=True)
 
-        # Fill qty from session
-        table["product_number"] = table["product_number"].astype(str)
-        table["qty"] = table["product_number"].map(st.session_state["qty_map"]).fillna(0).astype(int)
 
         if search:
             table = table[table["item"].str.contains(search, case=False, na=False)]
