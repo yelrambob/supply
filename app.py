@@ -269,7 +269,11 @@ with tabs[0]:
         table["qty"] = table["product_number"].map(st.session_state["qty_map"]).fillna(0).astype(int)
 
         if search:
-            table = table[table["item"].str.contains(search, case=False, na=False)]
+            mask = (
+                table["item"].str.contains(search, case=False, na=False) |
+                table["product_number"].str.contains(search, case=False, na=False)
+            )
+            table = table[mask]
 
         table["_row_key"] = table["product_number"]
 
