@@ -210,6 +210,27 @@ logs = read_log()
 email_ready = "✅" if smtp_ok() else "❌"
 st.caption(f"Loaded {len(catalog)} catalog rows • {len(logs)} log rows • Email configured: {email_ready}")
 
+# --- Running List Preview ---
+selected_items = []
+for pid, qty in st.session_state["qty_map"].items():
+    if qty > 0:
+        row = catalog.loc[catalog["product_number"].astype(str) == str(pid)]
+        if not row.empty:
+            selected_items.append({
+                "item": row.iloc[0]["item"],
+                "product_number": pid,
+                "qty": qty
+            })
+
+if selected_items:
+    st.markdown("### 🛒 Current Order (in progress)")
+    st.dataframe(pd.DataFrame(selected_items), hide_index=True, use_container_width=True)
+    if st.button("🧹 Clear Current Order"):
+        st.session_state["qty_map"] = {}
+        st.rerun()
+else:
+    st.caption("🛒 No items currently selected.")
+
 tabs = st.tabs(["Create Order", "Adjust Inventory", "Catalog", "Order Logs"])
 
 # ---------- Create Order ----------
