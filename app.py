@@ -312,8 +312,24 @@ with tabs[0]:
                 if smtp_ok():
                     recipients = all_recipients(emails_df)
                     if recipients:
-                        lines = [f"- {r['item']} (#{r['product_number']}): {r['qty']}" for _, r in selected.iterrows()]
-                        body = "\n".join([f"New supply order at {when_str}", f"Ordered by: {orderer}", "", *lines])
+                        # Build the email body directly from the live running list
+                        selected_items = []
+                        for pid, qty in st.session_state["qty_map"].items():
+                            if qty > 0:
+                                row = catalog.loc[catalog["product_number"].astype(str) == str(pid)]
+                                if not row.empty:
+                                    selected_items.append(f"- {row.iloc[0]['item']} (#{pid}): {qty}")
+                        
+                        if selected_items:
+                            body = "\n".join([
+                                f"New supply order at {when_str}",
+                                f"Ordered by: {orderer}",
+                                "",
+                                *selected_items
+                            ])
+                        else:
+                            body = f"New supply order at {when_str}\nOrdered by: {orderer}\n\n(No items found)"
+
                         try:
                             send_email("Supply Order Logged", body, recipients)
                             st.success(f"Emailed {len(recipients)} recipient(s).")
