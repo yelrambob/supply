@@ -295,8 +295,15 @@ with tabs[0]:
             key="order_editor",
         )
 
+        rerun_needed = False
         for _, r in edited.iterrows():
-            st.session_state["qty_map"][str(r["product_number"])] = int(r["qty"])
+            new_qty = int(r["qty"])
+            pid = str(r["product_number"])
+            if st.session_state["qty_map"].get(pid) != new_qty:
+                st.session_state["qty_map"][pid] = new_qty
+                rerun_needed = True
+        if rerun_needed:
+            st.rerun()
 
         selected = edited[edited["qty"] > 0]
         if st.button("🧾 Generate & Log Order"):
