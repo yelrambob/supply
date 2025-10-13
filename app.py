@@ -307,8 +307,21 @@ with tabs[0]:
 
         selected = edited[edited["qty"] > 0]
         if st.button("🧾 Generate & Log Order"):
-            if not selected.empty:
-                when_str = append_log(selected, orderer)
+            # Build full order from all qty_map entries (not just visible search results)
+            full_order = []
+            for pid, qty in st.session_state["qty_map"].items():
+                if qty > 0:
+                    row = catalog.loc[catalog["product_number"].astype(str) == str(pid)]
+                    if not row.empty:
+                        full_order.append({
+                            "item": row.iloc[0]["item"],
+                            "product_number": pid,
+                            "qty": qty
+                        })
+            full_order_df = pd.DataFrame(full_order)
+            
+            if not full_order_df.empty:
+                when_str = append_log(full_order_df, orderer)
                 if smtp_ok():
                     recipients = all_recipients(emails_df)
                     if recipients:
