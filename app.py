@@ -225,6 +225,12 @@ for pid, qty in st.session_state["qty_map"].items():
 if selected_items:
     st.markdown("### 🛒 Current Order (in progress)")
     st.dataframe(pd.DataFrame(selected_items), hide_index=True, use_container_width=True)
+    
+    # NEW: Display comma-separated product numbers below the table
+    product_numbers = [item["product_number"] for item in selected_items]
+    if product_numbers:
+        st.markdown(f"**Product Numbers:** {', '.join(product_numbers)}")
+    
     if st.button("🧹 Clear Current Order"):
         st.session_state["qty_map"] = {}
         st.rerun()
@@ -331,16 +337,20 @@ with tabs[0]:
                     if recipients:
                         # Build the email body directly from the live running list
                         selected_items = []
+                        product_numbers = []  # NEW: Collect product numbers for email
                         for pid, qty in st.session_state["qty_map"].items():
                             if qty > 0:
                                 row = catalog.loc[catalog["product_number"].astype(str) == str(pid)]
                                 if not row.empty:
                                     selected_items.append(f"- {row.iloc[0]['item']} (#{pid}): {qty}")
+                                    product_numbers.append(pid)  # NEW: Add to product numbers list
                         
                         if selected_items:
+                            # NEW: Include comma-separated product numbers in email
                             body = "\n".join([
                                 f"New supply order at {when_str}",
                                 f"Ordered by: {orderer}",
+                                f"Product Numbers: {', '.join(product_numbers)}",  # NEW LINE
                                 "",
                                 *selected_items
                             ])
