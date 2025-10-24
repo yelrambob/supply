@@ -12,7 +12,6 @@ from supabase import create_client
 st.set_page_config(page_title="Supply Ordering", page_icon="📦", layout="wide")
 
 NYC = zoneinfo.ZoneInfo("America/New_York")
-
 now = datetime.now(NYC).strftime("%Y-%m-%d %H:%M:%S")
 
 # ---------------- Paths ----------------
@@ -114,9 +113,10 @@ def read_people() -> list[str]:
 def read_catalog() -> pd.DataFrame:
     df = safe_read_csv(CATALOG_PATH)
     if df.empty:
-        return pd.DataFrame(columns=["item", "product_number", "multiplier", "items_per_order", "current_qty", "sort_order"])
+        return pd.DataFrame(columns=["item", "product_number", "multiplier", "items_per_order", "current_qty", "sort_order", "price"])
 
-    for c in ["item", "product_number", "multiplier", "items_per_order", "current_qty", "sort_order"]:
+    # Ensure required columns exist
+    for c in ["item", "product_number", "multiplier", "items_per_order", "current_qty", "sort_order", "price"]:
         if c not in df.columns:
             df[c] = pd.NA
 
@@ -125,6 +125,7 @@ def read_catalog() -> pd.DataFrame:
     df["multiplier"] = pd.to_numeric(df["multiplier"], errors="coerce").fillna(1).astype(int)
     df["items_per_order"] = pd.to_numeric(df["items_per_order"], errors="coerce").fillna(1).astype(int)
     df["current_qty"] = pd.to_numeric(df["current_qty"], errors="coerce").fillna(0).astype(int)
+    df["price"] = pd.to_numeric(df["price"], errors="coerce").fillna(0).astype(float)
 
     so = pd.to_numeric(df["sort_order"], errors="coerce")
     filler = pd.Series(range(len(df)), index=df.index)
@@ -157,7 +158,6 @@ def read_log() -> pd.DataFrame:
     return pd.DataFrame(res.data)
 
 def last_info_map() -> pd.DataFrame:
-    """Return last order info per item/product_number."""
     logs = read_log()
     if logs.empty:
         return pd.DataFrame(columns=["item","product_number","last_ordered_at","last_qty","last_orderer"])
@@ -225,17 +225,6 @@ for pid, qty in st.session_state["qty_map"].items():
 if selected_items:
     st.markdown("### 🛒 Current Order (in progress)")
     st.dataframe(pd.DataFrame(selected_items), hide_index=True, use_container_width=True)
-    
-    # NEW: Display comma-separated product numbers below the table
-    product_numbers = [item["product_number"] for item in selected_items]
-    if product_numbers:
-        st.markdown(f"**Product Numbers:** {', '.join(product_numbers)}")
-    
-    if st.button("🧹 Clear Current Order"):
-        st.session_state["qty_map"] = {}
-        st.rerun()
-else:
-    st.caption("🛒 No items currently selected.")
 
 tabs = st.tabs(["Create Order", "Adjust Inventory", "Catalog", "Order Logs"])
 
@@ -253,24 +242,15 @@ with tabs[0]:
         with c2:
             search = st.text_input("Search items")
 
-        # Merge catalog with last order info
         last_map = last_info_map()
         table = catalog.merge(last_map, on=["item","product_number"], how="left")
-
-        # Ensure last_* columns always exist
         for c in ["last_ordered_at", "last_qty", "last_orderer"]:
             if c not in table.columns:
                 table[c] = pd.NA
 
-        # Parse datetime and sort by most recent order first
         table["last_ordered_at"] = pd.to_datetime(table["last_ordered_at"], errors="coerce")
-        table = table.sort_values(
-            ["last_ordered_at", "item"],
-            ascending=[False, True],
-            na_position="last"
-        ).reset_index(drop=True)
+        table = table.sort_values(["last_ordered_at", "item"], ascending=[False, True], na_position="last").reset_index(drop=True)
 
-        # Fill qty from session
         table["product_number"] = table["product_number"].astype(str)
         table["qty"] = table["product_number"].map(st.session_state["qty_map"]).fillna(0).astype(int)
 
@@ -281,18 +261,17 @@ with tabs[0]:
             )
             table = table[mask]
 
-        table["_row_key"] = table["product_number"]
-
         edited = st.data_editor(
             table[[
-                "qty", "item", "product_number", "multiplier",
-                "items_per_order", "current_qty",
+                "qty", "item", "product_number", "price",
+                "multiplier", "items_per_order", "current_qty",
                 "last_ordered_at", "last_qty", "last_orderer"
             ]],
             use_container_width=True,
             hide_index=True,
             column_config={
                 "qty": st.column_config.NumberColumn("Qty", min_value=0, step=1),
+                "price": st.column_config.NumberColumn("Price", min_value=0, step=1, disabled=True),
                 "item": st.column_config.TextColumn("Item", disabled=True),
                 "product_number": st.column_config.TextColumn("Product #", disabled=True),
                 "multiplier": st.column_config.NumberColumn("Multiplier", disabled=True),
@@ -305,19 +284,12 @@ with tabs[0]:
             key="order_editor",
         )
 
-        rerun_needed = False
         for _, r in edited.iterrows():
             new_qty = int(r["qty"])
             pid = str(r["product_number"])
-            if st.session_state["qty_map"].get(pid) != new_qty:
-                st.session_state["qty_map"][pid] = new_qty
-                rerun_needed = True
-        if rerun_needed:
-            st.rerun()
+            st.session_state["qty_map"][pid] = new_qty
 
-        selected = edited[edited["qty"] > 0]
         if st.button("🧾 Generate & Log Order"):
-            # Build full order from all qty_map entries (not just visible search results)
             full_order = []
             for pid, qty in st.session_state["qty_map"].items():
                 if qty > 0:
@@ -329,39 +301,59 @@ with tabs[0]:
                             "qty": qty
                         })
             full_order_df = pd.DataFrame(full_order)
-            
+
             if not full_order_df.empty:
                 when_str = append_log(full_order_df, orderer)
                 if smtp_ok():
                     recipients = all_recipients(emails_df)
                     if recipients:
-                        # Build the email body directly from the live running list
-                        selected_items = []
-                        product_numbers = []  # NEW: Collect product numbers for email
-                        for pid, qty in st.session_state["qty_map"].items():
-                            if qty > 0:
-                                row = catalog.loc[catalog["product_number"].astype(str) == str(pid)]
-                                if not row.empty:
-                                    selected_items.append(f"- {row.iloc[0]['item']} (#{pid}): {qty}")
-                                    product_numbers.append(pid)  # NEW: Add to product numbers list
-                        
-                        if selected_items:
-                            # NEW: Include comma-separated product numbers in email
-                            body = "\n".join([
-                                f"New supply order at {when_str}",
-                                f"Ordered by: {orderer}",
-                                f"Product Numbers: {', '.join(product_numbers)}",  # NEW LINE
-                                "",
-                                *selected_items
-                            ])
-                        else:
-                            body = f"New supply order at {when_str}\nOrdered by: {orderer}\n\n(No items found)"
+                        # --- Group product numbers by $5000 batches ---
+                        order_with_price = full_order_df.merge(
+                            catalog[["product_number", "price"]],
+                            on="product_number",
+                            how="left"
+                        )
+                        order_with_price["price"] = pd.to_numeric(order_with_price["price"], errors="coerce").fillna(0)
+                        order_with_price["total"] = order_with_price["qty"] * order_with_price["price"]
+
+                        batches, current_batch, running_total = [], [], 0.0
+                        for _, r in order_with_price.iterrows():
+                            cost = r["total"]
+                            if running_total + cost > 5000 and current_batch:
+                                batches.append((current_batch, running_total))
+                                current_batch = [r]
+                                running_total = cost
+                            else:
+                                current_batch.append(r)
+                                running_total += cost
+                        if current_batch:
+                            batches.append((current_batch, running_total))
+
+                        batch_lines = []
+                        for (batch, subtotal) in batches:
+                            nums = ", ".join(str(x["product_number"]) for x in batch)
+                            batch_lines.append(f"{nums} = $ {subtotal:,.0f}")
+
+                        product_numbers_section = "\n".join(batch_lines)
+
+                        body = "\n".join([
+                            f"New supply order at {when_str}",
+                            f"Ordered by: {orderer}",
+                            "Product numbers:",
+                            product_numbers_section,
+                            "",
+                            *[
+                                f"- {r['item']} (#{r['product_number']}): {r['qty']}"
+                                for _, r in full_order_df.iterrows()
+                            ]
+                        ])
 
                         try:
                             send_email("Supply Order Logged", body, recipients)
                             st.success(f"Emailed {len(recipients)} recipient(s).")
                         except Exception as e:
                             st.error(f"Email failed: {e}")
+
                 st.session_state["qty_map"] = {}
                 st.rerun()
 
@@ -370,7 +362,7 @@ with tabs[1]:
     if catalog.empty:
         st.info("No catalog found.")
     else:
-        st.write("Adjust `current_qty` or `sort_order`, then save.")
+        st.write("Adjust `current_qty`, `sort_order`, or `price`, then save.")
         editable = catalog.copy().reset_index(drop=True)
         edited = st.data_editor(
             editable,
@@ -379,6 +371,7 @@ with tabs[1]:
             column_config={
                 "item": st.column_config.TextColumn("Item", disabled=True),
                 "product_number": st.column_config.TextColumn("Product #", disabled=True),
+                "price": st.column_config.NumberColumn("Price", min_value=0, step=1),
                 "multiplier": st.column_config.NumberColumn("Multiplier", min_value=1, step=1),
                 "items_per_order": st.column_config.NumberColumn("Items/Order", min_value=1, step=1),
                 "current_qty": st.column_config.NumberColumn("Current Qty", min_value=0, step=1),
