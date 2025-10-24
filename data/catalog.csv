@@ -1,19 +1,19 @@
-item,product_number,multiplier,items_per_order
-Xtra Small Nitrile Gloves,179887,10,1
-Small Nitrile Gloves,48730,10,1
-Medium Nitrile Gloves,48731,10,1
-Large Nitrile Gloves,48732,10,1
-Xtra Large Nitrile Gloves,48734,10,1
-6 gloves ,65694
-6-1/2 gloves,20711
-7 gloves,20712
-7-1/2 gloves,20713
-8 gloves ,20714
-Sterile Gowns,23916
-Sterile gauze large 4x4,24015
-Sterile gauze small 2x2,24014
-Alcohol wipes ,518
-Green IV swabs Prevantics,162051
+item,product_number,multiplier,items_per_order,price
+Xtra Small Nitrile Gloves,179887,1,1,78
+Small Nitrile Gloves,48730,10,1,8
+Medium Nitrile Gloves,48731,10,1,8
+Large Nitrile Gloves,48732,10,1,8
+Xtra Large Nitrile Gloves,48734,10,1,8
+6 gloves ,65694,1,1,64
+6-1/2 gloves,20711,1,1,64
+7 gloves,20712,1,1,64
+7-1/2 gloves,20713,1,1,64
+8 gloves ,20714,1,1,64
+Sterile Gowns,23916,1,1,3
+Sterile gauze large 4x4,24015,1,1,3
+Sterile gauze small 2x2,24014,1,1,2
+Alcohol wipes ,518,1,1,2
+Green IV swabs Prevantics,162051,1,1,11
 Small Tegaderms,21092
 Large Tegaderms,592
 Coban Multicolor,222560,1,1
@@ -161,17 +161,17 @@ Blunt tip,170961
 50 ml syringe ,1600
 Toumey Syringe ,23803
 125 ml coeur syringe,161742
-Double Medrad ,102083
-Flex Syringe ,235939
+Double Medrad ,102083,1,1,250
+Flex Syringe ,235939,1,1,250
 Breeza,122974
 Oral Omni 9mg,232842
 Oral Omni 12mg,232843A
 Readicat,92423
 Cysto Conray 250,22938
 Cysto Tubing ,217077
-Omnipaque 240mg 50ml ,174864
-Omnipaque 350mg 100ml ,162069
-Omnipaque 300mg 100ml ,1686
+Omnipaque 240mg 50ml ,174864,1,1,91
+Omnipaque 350mg 100ml ,162069,1,1,168
+Omnipaque 300mg 100ml ,1686,1,1,161
 Visipaque ,97619
 Optiray 320mg ,39346
 50ml Saline (84),23080,84,1
