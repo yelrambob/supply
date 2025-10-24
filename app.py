@@ -290,72 +290,80 @@ with tabs[0]:
             st.session_state["qty_map"][pid] = new_qty
 
         if st.button("🧾 Generate & Log Order"):
-            full_order = []
-            for pid, qty in st.session_state["qty_map"].items():
-                if qty > 0:
-                    row = catalog.loc[catalog["product_number"].astype(str) == str(pid)]
-                    if not row.empty:
-                        full_order.append({
-                            "item": row.iloc[0]["item"],
-                            "product_number": pid,
-                            "qty": qty
-                        })
-            full_order_df = pd.DataFrame(full_order)
+    # Build full order from all qty_map entries (not just visible search results)
+    full_order = []
+    for pid, qty in st.session_state["qty_map"].items():
+        if qty > 0:
+            row = catalog.loc[catalog["product_number"].astype(str) == str(pid)]
+            if not row.empty:
+                full_order.append({
+                    "item": row.iloc[0]["item"],
+                    "product_number": pid,
+                    "qty": qty
+                })
+    full_order_df = pd.DataFrame(full_order)
+    
+    if not full_order_df.empty:
+        when_str = append_log(full_order_df, orderer)
+        if smtp_ok():
+            recipients = all_recipients(emails_df)
+            if recipients:
+                # ---------------- NEW EMAIL BODY SECTION ----------------
+                product_groups = []      # list of (product_numbers, subtotal)
+                current_group = []
+                running_total = 0.0
+                details_lines = []  # will hold "- Item (#pid): qty" lines
 
-            if not full_order_df.empty:
-                when_str = append_log(full_order_df, orderer)
-                if smtp_ok():
-                    recipients = all_recipients(emails_df)
-                    if recipients:
-                        # --- Group product numbers by $5000 batches ---
-                        order_with_price = full_order_df.merge(
-                            catalog[["product_number", "price"]],
-                            on="product_number",
-                            how="left"
-                        )
-                        order_with_price["price"] = pd.to_numeric(order_with_price["price"], errors="coerce").fillna(0)
-                        order_with_price["total"] = order_with_price["qty"] * order_with_price["price"]
+                for pid, qty in st.session_state["qty_map"].items():
+                    if qty > 0:
+                        row = catalog.loc[catalog["product_number"].astype(str) == str(pid)]
+                        if not row.empty:
+                            item_name = row.iloc[0]["item"]
+                            price = float(row.iloc[0].get("price", 0) or 0)
+                            total = qty * price
+                            running_total += total
+                            current_group.append(pid)
 
-                        batches, current_batch, running_total = [], [], 0.0
-                        for _, r in order_with_price.iterrows():
-                            cost = r["total"]
-                            if running_total + cost > 5000 and current_batch:
-                                batches.append((current_batch, running_total))
-                                current_batch = [r]
-                                running_total = cost
-                            else:
-                                current_batch.append(r)
-                                running_total += cost
-                        if current_batch:
-                            batches.append((current_batch, running_total))
+                            # Add detail line for each item
+                            details_lines.append(f"- {item_name} (#{pid}): {qty}")
 
-                        batch_lines = []
-                        for (batch, subtotal) in batches:
-                            nums = ", ".join(str(x["product_number"]) for x in batch)
-                            batch_lines.append(f"{nums} = $ {subtotal:,.0f}")
+                            # Start new group when subtotal exceeds 5000
+                            if running_total >= 5000:
+                                product_groups.append((current_group.copy(), running_total))
+                                current_group = []
+                                running_total = 0.0
 
-                        product_numbers_section = "\n".join(batch_lines)
+                # Add any remaining group
+                if current_group:
+                    product_groups.append((current_group, running_total))
 
-                        body = "\n".join([
-                            f"New supply order at {when_str}",
-                            f"Ordered by: {orderer}",
-                            "Product numbers:",
-                            product_numbers_section,
-                            "",
-                            *[
-                                f"- {r['item']} (#{r['product_number']}): {r['qty']}"
-                                for _, r in full_order_df.iterrows()
-                            ]
-                        ])
+                # Format grouped product lines
+                group_lines = []
+                for group, subtotal in product_groups:
+                    product_str = ", ".join(str(p) for p in group)
+                    group_lines.append(f"{product_str} = ${subtotal:,.0f}")
 
-                        try:
-                            send_email("Supply Order Logged", body, recipients)
-                            st.success(f"Emailed {len(recipients)} recipient(s).")
-                        except Exception as e:
-                            st.error(f"Email failed: {e}")
+                # Build final email body
+                body = "\n".join([
+                    f"New supply order at {when_str}",
+                    f"Ordered by: {orderer}",
+                    "",
+                    "Product:",
+                    *group_lines,
+                    "",
+                    "Details:",
+                    *details_lines
+                ])
+                # ----------------------------------------------------------
 
-                st.session_state["qty_map"] = {}
-                st.rerun()
+                try:
+                    send_email("Supply Order Logged", body, recipients)
+                    st.success(f"Emailed {len(recipients)} recipient(s).")
+                except Exception as e:
+                    st.error(f"Email failed: {e}")
+        st.session_state["qty_map"] = {}
+        st.rerun()
+
 
 # ---------- Adjust Inventory ----------
 with tabs[1]:
