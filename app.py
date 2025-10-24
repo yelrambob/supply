@@ -335,35 +335,65 @@ with tabs[0]:
                 if smtp_ok():
                     recipients = all_recipients(emails_df)
                     if recipients:
-                        # Build the email body directly from the live running list
+                        # Build selected items + product numbers for email
                         selected_items = []
-                        product_numbers = []  # NEW: Collect product numbers for email
+                        product_numbers = []
                         for pid, qty in st.session_state["qty_map"].items():
                             if qty > 0:
                                 row = catalog.loc[catalog["product_number"].astype(str) == str(pid)]
                                 if not row.empty:
                                     selected_items.append(f"- {row.iloc[0]['item']} (#{pid}): {qty}")
-                                    product_numbers.append(pid)  # NEW: Add to product numbers list
-                        
+                                    product_numbers.append(pid)
+                    
                         if selected_items:
-                            # NEW: Include comma-separated product numbers in email
+                            # --- Build product-number batches under $5000 (qty * price) ---
+                            order_with_price = full_order_df.merge(
+                                catalog[["product_number", "price"]],
+                                on="product_number",
+                                how="left"
+                            )
+                            order_with_price["price"] = pd.to_numeric(order_with_price["price"], errors="coerce").fillna(0)
+                            order_with_price["total"] = order_with_price["qty"] * order_with_price["price"]
+                    
+                            batches, current_batch, running_total = [], [], 0.0
+                            for _, r in order_with_price.iterrows():
+                                cost = r["total"]
+                                if running_total + cost > 5000 and current_batch:
+                                    batches.append((current_batch, running_total))
+                                    current_batch = [r]
+                                    running_total = cost
+                                else:
+                                    current_batch.append(r)
+                                    running_total += cost
+                            if current_batch:
+                                batches.append((current_batch, running_total))
+                    
+                            batch_lines = []
+                            for (batch, subtotal) in batches:
+                                nums = ", ".join(str(x["product_number"]) for x in batch)
+                                batch_lines.append(f"{nums} = $ {subtotal:,.0f}")
+                    
+                            product_numbers_section = "\n".join(batch_lines)
+                    
+                            # --- Build full email body ---
                             body = "\n".join([
                                 f"New supply order at {when_str}",
                                 f"Ordered by: {orderer}",
-                                f"Product Numbers: {', '.join(product_numbers)}",  # NEW LINE
+                                "Product numbers:",
+                                product_numbers_section,
                                 "",
                                 *selected_items
                             ])
                         else:
                             body = f"New supply order at {when_str}\nOrdered by: {orderer}\n\n(No items found)"
-
+                    
                         try:
                             send_email("Supply Order Logged", body, recipients)
                             st.success(f"Emailed {len(recipients)} recipient(s).")
                         except Exception as e:
                             st.error(f"Email failed: {e}")
-                st.session_state["qty_map"] = {}
-                st.rerun()
+                                    st.session_state["qty_map"] = {}
+                                    st.rerun()
 
 # ---------- Adjust Inventory ----------
 with tabs[1]:
