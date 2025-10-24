@@ -14,254 +14,254 @@ Sterile gauze large 4x4,24015,1,1,3
 Sterile gauze small 2x2,24014,1,1,2
 Alcohol wipes ,518,1,1,2
 Green IV swabs Prevantics,162051,1,1,11
-Small Tegaderms,21092
-Large Tegaderms,592
-Coban Multicolor,222560,1,1
-safety scalpel,62821
-Scalpel,326
-Bandaids ,508
-Connecting tubing ,151511
-Sterile markers ,3210
-Gridlines,98598
-Gridlines ,148704
-Marker Speed (BB),99245
-Chux ,20389
-Bath Cloths,38918
-Denture Cups ,1283
-Urinals,60
-Urine Cups,1815
-Bed Pans ,435
-XL Slipper Socks ,24217
-Enema Bag,26303
-"Enema Ring, Barbiepool",26291
-Cold Packs ,40306
-Hot Packs ,70041
-Transfer Boards ,26790
-White emesis bags ,98493
-Iodine,24030
-Peroxide,100538
-Alcohol,117993
-Small Chloraprep,87230
-Large chloarprep,96146
-IV Kits ,104738
-IV Extension Kit,217088
-IV tegaderms,591
-Hubs,217084
-IV tubing ,217077
-Kelly Clamp ,21296
-Brown Lunch Bags,5293
-Tissues,85
-Blueplastic gowns,1395
-Boufant Caps,406
-Ginsberg hats ,2010
-Shoe covers ,90
-Purple Wipes ,154245
-Bleach Wipes ,159378
-Paper towels ,121
-Sit Sling ,98617
-White disposable chair slip M/L,98616
-White disposable chair slip L/XL,98617
-White disposable chair slip XL/XXL,152966
-White disposable chair slip XXL/XXXL,152967
-Connecting tubing w/ stopcock ,151511
-IVY leads,233538
-Foam Leads,4394
-Drain Sponge w/slit,213
-3M dressing ,48473
-Torniquets,1094
-Yellow Arm Foam ,14389
-Blue/white prone pillow ,17210
-Peds pads,97318
-Peds Arm Board 5x2,26569
-Peds Arm Board 9x3,4095
-Leg bag,20589
-Leg Bag Combo ,117156
-Surgiform,24017
-0 Silk Suture ,1010
-0 Prolene Suture ,1805
-Red Blunt Tip Needles ,95567
-25g 5/8 safety glide needles ,24
-25g 1-1/2 eclipse needle,1341
-20g Spinal Needle,1353
-22g Spinal Needle,1352
-18g Spinal Needle ,20567
-18g Perc entry needle ,70028
-18gx15cm Trocar,153349
-18gx20cm Trocar,116288
-18gx10cm Chiba,75124
-18gx15cm Chiba,75125
-18gx20cm Chiba,80614
-22gx20cm Chiba,10448
-22gx15cm Chiba,39638
-20fr J thal,39564
-Biopince 18gx10cm,232269
-Biopince 18gx15cm,232268
-Biopince 18gx20cm,232267
-Bard Mission 18x10cm,176164
-Bard Mission 18x16cm,176165
-Bard Mission 18x20cm,176166
-Bard Mission 20x10cm,176218
-Bard Mission 20x16cm,176219
-Bard Mission 20x20cm,176220
-Coaxial 17gx6.8,151079
-Coaxial 17gx11.8,151080
-Coaxial 17gx16.8,160651
-Oncontrol 15gx3.5,159252
-Oncontrol 15gx2.7,159251
-Oncontrol 11gx6,401535
-T-lock Bone Marrow 8gx6in,153008
-T-lock Bone Marrow 11gx4in,162738
-T-lock Bone Marrow 11gx6in,153009
-Biopsy Trays ,238284
-Bone lesion Biopsy Trays ,168315
-Bone Marrow Trays,401535
-On Control Trays no needle,159250
-Osteocore 16gx7.5,163026
-Osteocore 16gx12.5,39218
-Statlock 6-8,62368
-Statlock 10-12,62369
-Statlock 12-14,62370
-12fr J thal,3609
-16fr J thal,60449
-18fr J thal,50102
-Homer 20gx7.5cm,3567
-Homer 20gx10cm,103518
-Argon Franseen Lung 18gx9cm,213801
-Argon Franseen Lung 18gx15cm,213802
-Argon Franseen Lung 18gx20cm,213803
-Argon Franseen Lung 20gx15cm,213804
-Argon Franseen Lung 22gx15cm,213805
-Comb ,547
-Patient Belonging Bags ,273
-Good masks,92697
-Comfort ear loop mask ,170889
-Ear Loop Mask ,20745
-Fluid Shield Mask ,4480
-Green N95,62219
-White N95,228745
-Duck Bill,202281
-Duck Bill Small,202282
-CT table Straps ,212246
-CT Cardiac cable,236444
-CT Cardiac 4 wires leads,237599
-Pillow Anesthesia Head,17210
-Argon,154856
-Helium,154855
-Short Stops,63216
-Blunt tip,170961
-18g Angiocath,199883
-20g Angiocath,199882
-22g Angiocath,199881
-24g Angiocath,199880
-1 inch single use ,23984
-"2"" tape",103652
-5 ml syringe,1595
-10 ml syringe,1596
-20 ml syringe,24237
-50 ml syringe ,1600
-Toumey Syringe ,23803
-125 ml coeur syringe,161742
+Small Tegaderms,21092,1,1,20
+Large Tegaderms,592,1,1,29
+Coban Multicolor,222560,1,1,63
+safety scalpel,62822,1,1,16
+Scalpel,326,1,1,8
+Bandaids ,508,1,1,2
+Circle Bandaids,509,1,1,2
+Knuckle Bandaids,192834,1,1,4
+Fingertip Bandaid,194516,1,1,4
+Connecting tubing ,151511,1,1,232
+Sterile markers ,3210,1,1,0.5
+Gridlines,98598,1,1,111
+Gridlines ,148704,1,1,111
+Marker Speed (BB),99245,1,1,34
+Chux ,171958,1,1,32
+Bath Cloths,38918,1,1,19
+Denture Cups ,1283,1,1,4
+Denture Cup Blue ,164401,1,1,11
+Urinals,DYND80235S,1,1,0.5
+Urine Cups,1815,1,1,1
+Bed Pans ,435,1,1,1
+XL Slipper Socks ,24217,1,1,1
+2XL Slipper Socks ,195096,1,1,1
+3XL Slipper Socks ,246132,30,1,46
+Child Slipper,153611,30,1,19
+Enema Bag,26303,1,1,313
+"Enema Ring, Barbiepool",26291,1,1,178
+Cold Packs ,40306,10,1,17
+Hot Packs ,70041,10,1,9
+Transfer Board Sliding,26790,1,1,190
+White emesis bags,98493,1,1,5
+Iodine,24030,1,1,3
+Peroxide,100538,1,1,1
+Alcohol,117993,1,1,1
+Small Chloraprep,87230,1,1,25
+Large chloarprep,96146,1,1,304
+IV Kits ,104738,1,1,1.5
+IV Extension Kit,217088,1,1,1.5
+IV tegaderms,591,1,1,56
+Hubs,217084,1,1,1
+IV tubing ,217077,1,1,2.5
+Kelly Clamp ,21296,1,1,1
+Brown Lunch Bags,5293,1,1,0.05
+Tissues,85,1,1,0.5
+Blueplastic gowns,1395,1,1,26.5
+Boufant Caps,406,1,1,5
+Paper Surgical Caps,2010,1,1,10
+Shoe covers ,90,1,1,11.5
+Hand Sanitizer dispenser,230391,1,1,52
+Purple Wipes ,154245,1,1,5.5
+Bleach Wipes ,159378,1,1,5
+Paper towels ,121,1,1,23
+Sit Sling ,98617,1,1,38
+White disposable chair slip M/L,98616,1,1,41
+White disposable chair slip XL/XXL,152966,1,1,624
+White disposable chair slip XXL/XXXL,152967,1,1,63
+IVY leads,233538,1,1,34
+Foam Leads,4394,1,1,4
+Drain Sponge w/slit,213,1,1,3
+3M dressing ,48473,1,1,19
+Torniquets,1094,1,1,15
+Yellow Arm Foam ,14389,1,1,83
+Blue/white prone pillow ,17210,1,1,81
+Peds pads,97318,1,1,23
+Peds Arm Board 5x2,26569,1,1,2
+Peds Arm Board 9x3,4095,1,1,2
+Leg bag,20589,1,1,2
+Leg Bag Combo ,117156,1,1,231
+Surgiform,24017,1,1,4.5
+0 Silk Suture ,1010,1,1,43
+0 Prolene Suture ,1805,1,1,82
+Red Blunt Tip Needles ,95567,1,1,7
+25g 1-1/2 eclipse needle,1341,1,1,15
+20g Spinal Needle,1353,1,1,49
+22g Spinal Needle,1352,1,1,2.5
+18g Spinal Needle ,20567,1,1,59
+18g Perc entry needle ,70028,1,1,4
+18gx15cm Trocar,153349,1,1,14
+18gx20cm Trocar,116288,1,1,14
+18gx10cm Chiba,75124,1,1,10
+18gx15cm Chiba,75125,1,1,10
+18gx20cm Chiba,80614,1,1,10
+22gx20cm Chiba,10448,1,1,10
+22gx15cm Chiba,39638,1,1,10
+20fr J thal,39564,1,1,130
+Biopince 18gx10cm,232269,1,1,355
+Biopince 18gx15cm,232268,1,1,355
+Biopince 18gx20cm,232267,1,1,355
+Bard Mission 18x10cm,176164,1,1,190
+Bard Mission 18x16cm,176165,1,1,190
+Bard Mission 18x20cm,176166,1,1,190
+Bard Mission 20x10cm,176218,1,1,190
+Bard Mission 20x16cm,176219,1,1,190
+Bard Mission 20x20cm,176220,1,1,190
+Coaxial 17gx6.8,151079,1,1,59
+Coaxial 17gx11.8,151080,1,1,59
+Coaxial 17gx16.8,160651,1,1,59
+Oncontrol 15gx3.5,159252,1,1,250
+Oncontrol 15gx2.7,159251,1,1,523
+Oncontrol 11gx6,401535,1,1,859
+T-lock Bone Marrow 8gx6in,153008,1,1,300
+T-lock Bone Marrow 11gx4in,162738,1,1,300
+T-lock Bone Marrow 11gx6in,153009,1,1,300
+Biopsy Trays ,238284,1,1,483
+Bone lesion Biopsy Trays ,168315,1,1,2465
+Bone Marrow Trays,401535,1,1,858.5
+On Control Trays no needle,159250,1,1,328
+Osteocore 16gx7.5,163026,1,1,
+Osteocore 16gx12.5,39218,1,1,245
+Statlock 6-8,62368,1,1,119
+Statlock 10-12,62369,1,1,208
+Statlock 12-14,62370,1,1,
+12fr J thal,3609,1,1,130
+16fr J thal,60449,1,1,130
+18fr J thal,50102,1,1,130
+Homer 20gx7.5cm,3567,1,1,345
+Homer 20gx10cm,103518,1,1,345
+Argon Franseen Lung 18gx9cm,213801,1,1,80
+Argon Franseen Lung 18gx15cm,213802,1,1,80
+Argon Franseen Lung 18gx20cm,213803,1,1,80
+Argon Franseen Lung 20gx15cm,213804,1,1,80
+Argon Franseen Lung 22gx15cm,213805,1,1,80
+Comb ,547,1,1,0.55
+Patient Belonging Bags ,273,1,1,3.75
+Good masks,92697,1,1,9
+Comfort ear loop mask ,170889,1,1,34
+Ear Loop Mask ,20745,1,1,34
+Fluid Shield Mask ,4480,1,1,12
+Green N95,62219,1,1,36
+White N95,228745,1,1,17
+Duck Bill,202281,1,1,305
+Duck Bill Small,202282,1,1,52
+CT table Straps ,212246,1,1,95
+CT Cardiac cable,236444,1,1,214
+CT Cardiac 4 wires leads,237599,1,1,569
+92 in. Slicker,200782,1,1,293
+82.75 in. Slicker,184327,1,1,332
+85.5 in. Slicker,245077,1,1,356
+Pillow Anesthesia Head,17210,1,1,81
+Argon,154856,1,1,94
+Helium,154855,1,1,1200
+Short Stops,63216,1,1,60
+18g Angiocath,199883,1,1,76
+20g Angiocath,199882,1,1,77
+22g Angiocath,199881,1,1,81
+24g Angiocath,199880,1,1,81
+"1"" inch single use ",103562,1,1,0.22
+"3"" inch tape",23984,1,1,6
+5 ml syringe,1595,1,1,13
+10 ml syringe,1596,1,1,22
+20 ml syringe,24237,1,1,0.23
+50 ml syringe ,1600,1,1,0.5
+Toumey Syringe ,23803,1,1,55
 Double Medrad ,102083,1,1,250
 Flex Syringe ,235939,1,1,250
-Breeza,122974
-Oral Omni 9mg,232842
-Oral Omni 12mg,232843A
-Readicat,92423
-Cysto Conray 250,22938
-Cysto Tubing ,217077
+Contrast spike ,102463,1,1,48
+Breeza,122974,1,1,91
+Oral Omni 9mg,232842,1,1,100
+Oral Omni 12mg,232843A,1,1,104
+Readicat Berry,92423,1,1,56
+Readicat Banananana,78956,1,1,56
+Readicat Vanilla,119373,1,1,56
+Readicat Mocha,119372,1,1,56
+Cysto Tubing ,217077,1,1,2.55
 Omnipaque 240mg 50ml ,174864,1,1,91
 Omnipaque 350mg 100ml ,162069,1,1,168
 Omnipaque 300mg 100ml ,1686,1,1,161
-Visipaque ,97619
-Optiray 320mg ,39346
-50ml Saline (84),23080,84,1
-100ml Saline (64),23081,64,1
-150ml Saline,23074
-250ml Saline,23075
-500ml Saline,23077
-Sterile Saline Flush Syringe,109030
-Saline Flush 10 ml Syringe,64305,16,1
-0.9% sodium chloride 10ml,24139
-Sweet Ease ,63068
-Lifepak paper,104257
-Odor eliminator Lemon,222420
-Odor eliminator,222421
-Adultpads,99239
-Nasal Cannula ,250
-Ped O2 Mask,21409
-Adult O2 Mask,24070
-Green O2 adapter,24280
-Infant O2 cannula ,21474
-Non-rebreather Peds,21394
-Non-rebreather Adults,81013
-O2 christmas tree,1257
-O2 extension tubing ,2423
-O2 sensor peds,96212
-Suction Canister ,40272
-Suction Tubing 20ft ,251418
-Yankauer,20756
-Ambu Bags,20744
-Peds ambu bags ,22945
-Infant ambu bags,185900
-orange top specimen cont.,7003
-Green Top Vials,7268
-Orange Swab Tops ,219491
-E-swab,118901
-Specimen Bags Small,37433
-Specimen Bags Medium,20471
-Specimen Bags Large,36611
-Specimen Bags Xtra Large,37439
-Telfa,24031
-3-Way Stopcock ,3429
-Embocube green 2.5x100,224688
-Embocube green 2.5x50,228790
-Torpedo 2.5x10,224689
-Torpedo 5x10,224690
-Surgifoam,24017
-Red Medallion syringe ,64921
-Xeroform,20497
-5fr Dilator,16976
-6fr Dilator,20942
-7fr Dilator,39637
-8fr Dilator,12344
-9fr Dilator,16484
-10 Dilator,16815
-12 Dilator,16817
-14fr Dilator,16825
-16fr Dilator,62843
-APD 6fr,233716
-APD 8fr,233714
-APD 10fr,233715
-APD 12fr,233719
-APD 14fr,233720
-APD 16fr,233904
-Biopatch,160784
-Guide Wire ,208092
-Peds J wire ,118013
-Amplatz superstiff .038x180cm,2198
-Amplatz superstiff .038x145cm,26285
-Amplatz superstiff .038x75cm,63206
-1liter Evac Bottle ,22992
-Drain Bulb w/tubing ,117413
-Drain connection,206088
-16fr Foley,20742
-18fr Foley,20741
-U/S paracentesis tray,160935
-Para Kits 5/ box ,95541
-5fr Para Cath ,63907
-Para Spikes ,85920
-Spikes Para Bottles,206088
-Para Bottles 500ml ,22991
-Pleura Vac ,21148
-Lung Plug Tract Sealant,204489
-Franseen 18gx15cm,148898
-Franseen 18gx20cm,148974
-Franseen 20gx10cm,148899
-Franseen 20gx15cm,213804
-Franseen 20gx20cm,148971
-Franseen 22gx20cm,148973
-Franseen Lung 18gx15cm,148725
-Franseen Lung 18gx20cm,72357
-Franseen Lung 20gx15cm,148727
-Franseen Lung 22gx20cm,98604
-Probe Covers U/S, 150059
+Visipaque ,97619,1,1,351
+50ml Saline (84),23080,84,1,1.75
+100ml Saline (64),23081,64,1,1.75
+150ml Saline,23074,1,1,
+250ml Saline,23075,1,1,1.75
+500ml Saline,23077,1,1,2
+Sterile Saline Flush Syringe,109030,1,1,0.9
+Saline Flush 10 ml Syringe,64305,16,1,7.85
+Lifepak paper,104257,1,1,14
+Odor eliminator Lemon,222420,1,1,102
+Odor eliminator,222421,1,1,102
+Adultpads,99239,1,1,18
+Nasal Cannula ,250,1,1,0.5
+Ped O2 Mask,21409,1,1,60
+Adult O2 Mask,24070,1,1,0.68
+Green O2 adapter,24280,1,1,0.25
+Infant O2 cannula ,60380,1,1,49
+Non-rebreather Peds,21394,1,1,1.2
+Non-rebreather Adults,81013,1,1,51
+O2 christmas tree,1257,1,1,0.3
+O2 extension tubing ,245068,1,1,0.4
+O2 sensor peds,96212,1,1,315
+Suction Canister ,40272,1,1,1.15
+Suction Tubing 20ft ,251418,1,1,14
+Yankauer,20756,1,1,0.3
+Ambu Bags,20744,1,1,6.5
+Peds ambu bags ,22945,1,1,6.5
+Infant ambu bags,185900,1,1,160
+orange top specimen cont.,7003,1,1,322
+Orange Swab Tops ,219491,1,1,48
+E-swab,118901,1,1,0.65
+Specimen Bags Small,37433,1,1,22
+Specimen Bags Medium,20471,1,1,1.9
+Specimen Bags Large,36611,1,1,2.9
+Specimen Bags Xtra Large,37439,1,1,49
+Telfa,24031,1,1,4.9
+3-Way Stopcock ,3429,1,1,0.35
+Embocube green 2.5x100,224688,1,1,304
+Embocube green 2.5x50,228790,1,1,304
+Torpedo 2.5x10,224689,1,1,330
+Torpedo 5x10,224690,1,1,330
+Surgifoam,24017,1,1,4.2
+Red Medallion syringe ,64921,1,1,49
+Xeroform,20497,1,1,36
+5fr Dilator,16976,1,1,8
+6fr Dilator,20942,1,1,8
+7fr Dilator,39637,1,1,8
+8fr Dilator,12344,1,1,8
+9fr Dilator,16484,1,1,8
+10 Dilator,16815,1,1,8
+12 Dilator,16817,1,1,8
+14fr Dilator,16825,1,1,8
+16fr Dilator,62843,1,1,8
+APD 6fr,233716,1,1,3
+APD 8fr,233714,1,1,375
+APD 10fr,233715,1,1,375
+APD 12fr,233719,1,1,375
+APD 14fr,233720,1,1,375
+APD 16fr,233904,1,1,375
+Biopatch,160784,1,1,56
+Guide Wire J 150cm,208092,1,1,120
+Peds J wire ,118013,1,1,13
+Amplatz superstiff .038x180cm,2198,1,1,175
+Amplatz superstiff .038x145cm,26285,1,1,175
+Amplatz superstiff .038x75cm,63206,1,1,175
+1liter Evac Bottle ,22992,1,1,10
+Drain Bulb w/tubing ,117413,1,1,123
+Drain connection,206088,1,1,2
+16fr Foley,20742,1,1,20
+18fr Foley,20741,1,1,14
+U/S paracentesis tray,160935,1,1,466
+Para Kits 5/ box ,95541,1,1,270
+5fr Para Cath ,63907,1,1,87
+Para Spikes ,85920,1,1,65
+Spikes Para Bottles,206088,1,1,1.8
+Para Bottles 500ml ,22991,1,1,10
+Pleura Vac ,21148,1,1,61
+Lung Plug Tract Sealant,204489,1,1,1654
+Franseen 18gx15cm,213802,1,1,80
+Franseen 18gx20cm,213803,1,1,80
+Franseen 20gx15cm,213804,1,1,80
+Franseen 20gx20cm,252038,1,1,80
+Franseen 22gx15cm,213805,1,1,80
+Probe Covers U/S,150059,1,1,57
