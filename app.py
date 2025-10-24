@@ -290,79 +290,79 @@ with tabs[0]:
             st.session_state["qty_map"][pid] = new_qty
 
         if st.button("🧾 Generate & Log Order"):
-    # Build full order from all qty_map entries (not just visible search results)
-    full_order = []
-    for pid, qty in st.session_state["qty_map"].items():
-        if qty > 0:
-            row = catalog.loc[catalog["product_number"].astype(str) == str(pid)]
-            if not row.empty:
-                full_order.append({
-                    "item": row.iloc[0]["item"],
-                    "product_number": pid,
-                    "qty": qty
-                })
-    full_order_df = pd.DataFrame(full_order)
-    
-    if not full_order_df.empty:
-        when_str = append_log(full_order_df, orderer)
-        if smtp_ok():
-            recipients = all_recipients(emails_df)
-            if recipients:
-                # ---------------- NEW EMAIL BODY SECTION ----------------
-                product_groups = []      # list of (product_numbers, subtotal)
-                current_group = []
-                running_total = 0.0
-                details_lines = []  # will hold "- Item (#pid): qty" lines
-
-                for pid, qty in st.session_state["qty_map"].items():
-                    if qty > 0:
-                        row = catalog.loc[catalog["product_number"].astype(str) == str(pid)]
-                        if not row.empty:
-                            item_name = row.iloc[0]["item"]
-                            price = float(row.iloc[0].get("price", 0) or 0)
-                            total = qty * price
-                            running_total += total
-                            current_group.append(pid)
-
-                            # Add detail line for each item
-                            details_lines.append(f"- {item_name} (#{pid}): {qty}")
-
-                            # Start new group when subtotal exceeds 5000
-                            if running_total >= 5000:
-                                product_groups.append((current_group.copy(), running_total))
-                                current_group = []
-                                running_total = 0.0
-
-                # Add any remaining group
-                if current_group:
-                    product_groups.append((current_group, running_total))
-
-                # Format grouped product lines
-                group_lines = []
-                for group, subtotal in product_groups:
-                    product_str = ", ".join(str(p) for p in group)
-                    group_lines.append(f"{product_str} = ${subtotal:,.0f}")
-
-                # Build final email body
-                body = "\n".join([
-                    f"New supply order at {when_str}",
-                    f"Ordered by: {orderer}",
-                    "",
-                    "Product:",
-                    *group_lines,
-                    "",
-                    "Details:",
-                    *details_lines
-                ])
-                # ----------------------------------------------------------
-
-                try:
-                    send_email("Supply Order Logged", body, recipients)
-                    st.success(f"Emailed {len(recipients)} recipient(s).")
-                except Exception as e:
-                    st.error(f"Email failed: {e}")
-        st.session_state["qty_map"] = {}
-        st.rerun()
+            # Build full order from all qty_map entries (not just visible search results)
+            full_order = []
+            for pid, qty in st.session_state["qty_map"].items():
+                if qty > 0:
+                    row = catalog.loc[catalog["product_number"].astype(str) == str(pid)]
+                    if not row.empty:
+                        full_order.append({
+                            "item": row.iloc[0]["item"],
+                            "product_number": pid,
+                            "qty": qty
+                        })
+            full_order_df = pd.DataFrame(full_order)
+            
+            if not full_order_df.empty:
+                when_str = append_log(full_order_df, orderer)
+                if smtp_ok():
+                    recipients = all_recipients(emails_df)
+                    if recipients:
+                        # ---------------- NEW EMAIL BODY SECTION ----------------
+                        product_groups = []      # list of (product_numbers, subtotal)
+                        current_group = []
+                        running_total = 0.0
+                        details_lines = []  # will hold "- Item (#pid): qty" lines
+        
+                        for pid, qty in st.session_state["qty_map"].items():
+                            if qty > 0:
+                                row = catalog.loc[catalog["product_number"].astype(str) == str(pid)]
+                                if not row.empty:
+                                    item_name = row.iloc[0]["item"]
+                                    price = float(row.iloc[0].get("price", 0) or 0)
+                                    total = qty * price
+                                    running_total += total
+                                    current_group.append(pid)
+        
+                                    # Add detail line for each item
+                                    details_lines.append(f"- {item_name} (#{pid}): {qty}")
+        
+                                    # Start new group when subtotal exceeds 5000
+                                    if running_total >= 5000:
+                                        product_groups.append((current_group.copy(), running_total))
+                                        current_group = []
+                                        running_total = 0.0
+        
+                        # Add any remaining group
+                        if current_group:
+                            product_groups.append((current_group, running_total))
+        
+                        # Format grouped product lines
+                        group_lines = []
+                        for group, subtotal in product_groups:
+                            product_str = ", ".join(str(p) for p in group)
+                            group_lines.append(f"{product_str} = ${subtotal:,.0f}")
+        
+                        # Build final email body
+                        body = "\n".join([
+                            f"New supply order at {when_str}",
+                            f"Ordered by: {orderer}",
+                            "",
+                            "Product:",
+                            *group_lines,
+                            "",
+                            "Details:",
+                            *details_lines
+                        ])
+                        # ----------------------------------------------------------
+        
+                        try:
+                            send_email("Supply Order Logged", body, recipients)
+                            st.success(f"Emailed {len(recipients)} recipient(s).")
+                        except Exception as e:
+                            st.error(f"Email failed: {e}")
+                st.session_state["qty_map"] = {}
+                st.rerun()
 
 
 # ---------- Adjust Inventory ----------
