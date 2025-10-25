@@ -375,7 +375,7 @@ with tabs[0]:
                             product_groups.append((current_group, running_total))
 
                         group_lines = []
-                        for group, subtotal in product_groups:
+                        for group, subtotal in reversed(product_groups):
                             product_str = ", ".join(str(p) for p in group)
                             group_lines.append(f"{product_str} = ${subtotal:,.0f}")
 
