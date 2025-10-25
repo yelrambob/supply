@@ -384,11 +384,11 @@ with tabs[0]:
                                 f"New supply order at {when_str}",
                                 f"Ordered by: {orderer}",
                                 "",
-                                "Product:",
-                                *group_lines,
-                                "",
                                 "Details:",
                                 *details_lines,
+                                "",
+                                "Product:",
+                                *group_lines,
                             ]
                         )
 
