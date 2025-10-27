@@ -379,7 +379,28 @@ with tabs[0]:
                             product_str = ", ".join(str(p) for p in group)
                             group_lines.append(f"{product_str} = ${subtotal:,.0f}")
 
-                        body = "\n".join(
+                        # HTML email body with checkbox
+                        html_body = f"""<html>
+<body>
+<p>New supply order at {when_str}</p>
+<p>Ordered by: {orderer}</p>
+<br>
+<p><strong>Details:</strong></p>
+{"<br>".join(details_lines)}
+<br>
+<p><strong>Product:</strong></p>
+{"<br>".join(group_lines)}
+<br>
+<hr>
+<label>
+    <input type="checkbox" checked onclick="this.checked=true">
+    Order confirmed and processed
+</label>
+</body>
+</html>"""
+
+                        # Plain text version for email clients that prefer it
+                        plain_body = "\n".join(
                             [
                                 f"New supply order at {when_str}",
                                 f"Ordered by: {orderer}",
@@ -389,11 +410,35 @@ with tabs[0]:
                                 "",
                                 "Product:",
                                 *group_lines,
+                                "",
+                                "---",
+                                "[Order confirmed and processed]"
                             ]
                         )
 
                         try:
-                            send_email("Supply Order Logged", body, recipients)
+                            # Create the email message with both HTML and plain text
+                            cfg = get_smtp_config()
+                            msg = EmailMessage()
+                            msg["Subject"] = f'{cfg["subject_prefix"]}Supply Order Logged' if cfg["subject_prefix"] else "Supply Order Logged"
+                            msg["From"] = cfg["from"]
+                            msg["To"] = ", ".join(recipients)
+                            
+                            # Set both HTML and plain text versions
+                            msg.set_content(plain_body) # Fallback for email clients that don't support HTML
+                            msg.add_alternative(html_body, subtype='html') # HTML version with checkbox
+                            
+                            if cfg["use_ssl"]:
+                                with smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=ssl.create_default_context()) as server:
+                                    server.login(cfg["username"], cfg["password"])
+                                    server.send_message(msg)
+                            else:
+                                with smtplib.SMTP(cfg["host"], cfg["port"]) as server:
+                                    server.ehlo()
+                                    server.starttls(context=ssl.create_default_context())
+                                    server.login(cfg["username"], cfg["password"])
+                                    server.send_message(msg)
+                            
                             st.success(f"Emailed {len(recipients)} recipient(s).")
                         except Exception as e:
                             st.error(f"Email failed: {e}")
