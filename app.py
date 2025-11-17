@@ -370,7 +370,8 @@ with tabs[0]:
 
                                     running_total += total
                                     current_group.append(pid)
-                                    details_lines.append(f"- {item_name} (#{pid}): {qty}")
+                                    details_lines.append(
+                                        f"<label><input type='checkbox'/> - {item_name} (#{pid}): {qty}</label>")
 
                         if current_group:
                             product_groups.append((current_group, running_total))
