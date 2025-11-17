@@ -85,7 +85,8 @@ def send_email(subject: str, body: str, to_emails: list[str] | None):
     msg["Subject"] = f'{cfg["subject_prefix"]}{subject}' if cfg["subject_prefix"] else subject
     msg["From"] = cfg["from"]
     msg["To"] = ", ".join(recipients)
-    msg.set_content(body)
+    msg.add_alternative(body, subtype="html")
+
 
     if cfg["use_ssl"]:
         with smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=ssl.create_default_context()) as server:
@@ -374,23 +375,34 @@ with tabs[0]:
                         if current_group:
                             product_groups.append((current_group, running_total))
 
+                        # --- Build group lines with HTML checkboxes ---
                         group_lines = []
                         for group, subtotal in reversed(product_groups):
                             product_str = ", ".join(str(p) for p in group)
-                            group_lines.append(f"{product_str} = ${subtotal:,.0f}")
-
-                        body = "\n".join(
-                            [
-                                f"New supply order at {when_str}",
-                                f"Ordered by: {orderer}",
-                                "",
-                                "Details:",
-                                *details_lines,
-                                "",
-                                "Product:",
-                                *group_lines,
-                            ]
-                        )
+                            # HTML checkbox (clickable in some email clients)
+                            group_lines.append(
+                                f"<label><input type='checkbox'/> {product_str} = ${subtotal:,.0f}</label>"
+                            )
+                        
+                        # --- Build the email body as HTML ---
+                        body = f"""
+                        <html>
+                        <body>
+                        <p><strong>New supply order at {when_str}</strong><br>
+                        Ordered by: {orderer}</p>
+                        
+                        <p><strong>Details:</strong><br>
+                        { "<br>".join(details_lines) }
+                        </p>
+                        
+                        <p><strong>Product:</strong><br>
+                        { "<br>".join(group_lines) }
+                        </p>
+                        
+                        </body>
+                        </html>
+                        """
+                        
 
                         try:
                             send_email("Supply Order Logged", body, recipients)
