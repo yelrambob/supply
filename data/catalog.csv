@@ -1,5 +1,5 @@
 item,product_number,multiplier,items_per_order,price
-Xtra Small Nitrile Gloves,179887,1,1,78
+Xtra Small Nitrile Gloves,179887,1,10,78
 Small Nitrile Gloves,48730,10,1,8
 Medium Nitrile Gloves,48731,10,1,8
 Large Nitrile Gloves,48732,10,1,8
@@ -272,3 +272,5 @@ prevalon mat refurbished,	237971,	1,	1,	575
 1 inch silktape, 103562, 1, 1, .216
 3 ml syringe, 1594, 1, 1,  13.25
 sterile gauze in tray, 1,1,.40
+Adult BP Cuff, 1,1,30  
+Small Bp Cuff,1,1,1.50
