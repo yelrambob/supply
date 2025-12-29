@@ -6,6 +6,7 @@ from datetime import datetime
 from pathlib import Path
 import re
 import smtplib, ssl
+import qrcode
 from email.message import EmailMessage
 from supabase import create_client
 
