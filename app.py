@@ -380,7 +380,7 @@ with tabs[0]:
                         # --- Build group lines with HTML checkboxes ---
                         group_lines = []
                         for group, subtotal in product_groups:
-                            product_str = ", ".join(str(p) for p in group)
+                            product_str = ", ".join(f'"{p}"' for p in group)
                             # HTML checkbox (clickable in some email clients)
                             group_lines.append(
                                 f"<label><input type='checkbox'/> {product_str} = ${subtotal:,.0f}</label>"
