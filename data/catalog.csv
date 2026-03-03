@@ -1,4 +1,4 @@
-item,product_number,multiplier_per_box,items_per_order,price
+Item,Product_number,Multiplier_per_box,Recommended_qty_per_order,price
 Xtra Small Nitrile Gloves,179887,1,10,78
 Small Nitrile Gloves,48730,10,1,8
 Medium Nitrile Gloves,48731,10,1,8
@@ -182,8 +182,8 @@ Omnipaque 240Mg 50Ml ,174864,1,1,91
 Omnipaque 350Mg 100Ml ,162069,1,1,168
 Omnipaque 300Mg 100Ml ,1686,1,1,161
 Visipaque ,97619,1,1,351
-50Ml Saline (84),23080,84,1,1.75
-100Ml Saline (64),23081,64,1,1.75
+50Ml Saline (84),23080,84,3 Boxes 252 qty,1.75
+100Ml Saline (64),23081,64,3 Boxes 192 qty,1.75
 150Ml Saline,23074,1,1,
 250Ml Saline,23075,1,1,1.75
 500Ml Saline,23077,1,1,2
@@ -278,6 +278,7 @@ Plastic Medicine Cups,1215,1,1,2
 Ulnar nerve pink elbow pillow, 14389,1,1,2
 Clipper Blade,20545,1,1,2 
 o2 connector christmas tree,2776,1,1,0.10
+
 
 
 
