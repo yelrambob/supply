@@ -210,11 +210,7 @@ def all_recipients(emails_df: pd.DataFrame) -> list[str]:
 
 # ---------------- Email body builder ----------------
 def build_email_body(qty_map: dict, catalog: pd.DataFrame, orderer: str, when_str: str) -> str:
-    details_lines = []
-    product_groups: list[tuple[list, float]] = []
-    current_group: list[str] = []
-    running_total = 0.0
-
+    items = []
     for pid, qty in qty_map.items():
         if qty <= 0:
             continue
@@ -223,23 +219,33 @@ def build_email_body(qty_map: dict, catalog: pd.DataFrame, orderer: str, when_st
             continue
         item_name = row.iloc[0]["item"]
         price     = float(row.iloc[0].get("price", 0) or 0)
-        total     = qty * price
+        items.append((pid, qty, item_name, qty * price))
 
-        if running_total + total > 4999 and current_group:
-            product_groups.append((current_group.copy(), running_total))
-            current_group  = []
-            running_total  = 0.0
+    # First-fit bin packing: try to add each item to the first group with room
+    bins: list[list[tuple]] = []
+    bin_totals: list[float] = []
+    for item in items:
+        pid, qty, item_name, total = item
+        placed = False
+        for i, bin_total in enumerate(bin_totals):
+            if bin_total + total <= 4999:
+                bins[i].append(item)
+                bin_totals[i] += total
+                placed = True
+                break
+        if not placed:
+            bins.append([item])
+            bin_totals.append(total)
 
-        running_total += total
-        current_group.append(pid)
-        details_lines.append(f"<label><input type='checkbox'/> {item_name} (#{pid}): {qty}</label>")
-
-    if current_group:
-        product_groups.append((current_group, running_total))
-
+    # Details and group checkboxes share the same group-first order
+    details_lines = [
+        f"<label><input type='checkbox'/> {item_name} (#{pid}): {qty}</label>"
+        for group in bins
+        for pid, qty, item_name, _ in group
+    ]
     group_lines = [
-        f"<label><input type='checkbox'/> {', '.join(f'&quot;{p}&quot;' for p in grp)} = ${sub:,.0f}</label>"
-        for grp, sub in product_groups
+        f"<label><input type='checkbox'/> {', '.join(f'&quot;{pid}&quot;' for pid, *_ in grp)} = ${sub:,.0f}</label>"
+        for grp, sub in zip(bins, bin_totals)
     ]
 
     return f"""
