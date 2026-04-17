@@ -368,7 +368,7 @@ with tabs[0]:
         # ---- FIX: only rerun when a qty genuinely changes to a non-zero value ----
         rerun_needed = False
         for _, r in edited.iterrows():
-            new_qty = int(r["qty"])
+            new_qty = int(r["qty"]) if pd.notna(r["qty"]) else 0
             pid     = str(r["product_number"])
             old_qty = st.session_state["qty_map"].get(pid, 0)
             if old_qty != new_qty:
