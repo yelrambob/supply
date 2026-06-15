@@ -193,7 +193,7 @@ def read_emails() -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 def all_recipients(emails_df: pd.DataFrame) -> list[str]:
-    cfg = get_smtp_config()
+    cfg = get_email_config()
     file_r = emails_df["email"].tolist() if not emails_df.empty else []
     return sorted({e for e in file_r + cfg.get("default_to", []) if e and "@" in e})
 
