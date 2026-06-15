@@ -52,10 +52,11 @@ def _split_emails(txt: str) -> list[str]:
 
 def get_email_config() -> dict:
     try:
-        s = st.secrets["resend"]
+        s = st.secrets["brevo"]
         return {
             "api_key":        s.get("api_key", ""),
-            "from":           s.get("from", ""),
+            "from_email":     s.get("from_email", ""),
+            "from_name":      s.get("from_name", "Supply Orders"),
             "subject_prefix": s.get("subject_prefix", ""),
             "default_to":     _split_emails(s.get("to", "")) if s.get("to") else [],
         }
@@ -64,7 +65,7 @@ def get_email_config() -> dict:
 
 def email_ok() -> bool:
     cfg = get_email_config()
-    return bool(cfg.get("api_key") and cfg.get("from"))
+    return bool(cfg.get("api_key") and cfg.get("from_email"))
 
 def send_email(subject: str, body: str, to_emails: list[str] | None):
     cfg = get_email_config()
@@ -79,13 +80,18 @@ def send_email(subject: str, body: str, to_emails: list[str] | None):
     full_subject = f"{prefix}{subject}" if prefix else subject
 
     resp = requests.post(
-        "https://api.resend.com/emails",
-        headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"},
-        json={"from": cfg["from"], "to": recipients, "subject": full_subject, "html": body},
+        "https://api.brevo.com/v3/smtp/email",
+        headers={"api-key": cfg["api_key"], "Content-Type": "application/json"},
+        json={
+            "sender":      {"name": cfg["from_name"], "email": cfg["from_email"]},
+            "to":          [{"email": e} for e in recipients],
+            "subject":     full_subject,
+            "htmlContent": body,
+        },
         timeout=15,
     )
     if not resp.ok:
-        raise RuntimeError(f"Resend API error {resp.status_code}: {resp.text}")
+        raise RuntimeError(f"Brevo API error {resp.status_code}: {resp.text}")
 
 # ---------------- Core data loaders ----------------
 @st.cache_data
