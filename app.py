@@ -5,8 +5,7 @@ import zoneinfo
 from datetime import datetime
 from pathlib import Path
 import re
-import smtplib, ssl
-from email.message import EmailMessage
+import requests
 from supabase import create_client
 
 st.set_page_config(page_title="Supply Ordering", page_icon="📦", layout="wide")
@@ -45,35 +44,30 @@ def safe_read_csv(path: Path, **kwargs) -> pd.DataFrame:
         st.warning(f"Couldn't read {path.name}: {e}")
         return pd.DataFrame()
 
-# ---------------- SMTP ----------------
+# ---------------- Email (Resend) ----------------
 def _split_emails(txt: str) -> list[str]:
     if not txt:
         return []
     return [p.strip() for p in re.split(r"[;,]\s*", str(txt)) if p.strip()]
 
-def get_smtp_config() -> dict:
+def get_email_config() -> dict:
     try:
-        s = st.secrets["smtp"]
+        s = st.secrets["resend"]
         return {
-            "host":           s.get("host"),
-            "port":           int(s.get("port", 587)),
-            "username":       s.get("user"),
-            "password":       s.get("password", "").replace(" ", ""),
-            "from":           s.get("from"),
+            "api_key":        s.get("api_key", ""),
+            "from":           s.get("from", ""),
             "subject_prefix": s.get("subject_prefix", ""),
             "default_to":     _split_emails(s.get("to", "")) if s.get("to") else [],
-            "use_ssl":        bool(s.get("use_ssl", False)),
         }
-    except Exception as e:
-        st.error(f"Error reading SMTP config: {e}")
+    except Exception:
         return {}
 
-def smtp_ok() -> bool:
-    cfg = get_smtp_config()
-    return all(cfg.get(k) for k in ["host", "port", "username", "password", "from"])
+def email_ok() -> bool:
+    cfg = get_email_config()
+    return bool(cfg.get("api_key") and cfg.get("from"))
 
 def send_email(subject: str, body: str, to_emails: list[str] | None):
-    cfg = get_smtp_config()
+    cfg = get_email_config()
     recipients = sorted({
         e for e in (to_emails or []) + cfg.get("default_to", [])
         if e and "@" in e
@@ -81,22 +75,17 @@ def send_email(subject: str, body: str, to_emails: list[str] | None):
     if not recipients:
         raise RuntimeError("No recipients found.")
 
-    msg = EmailMessage()
-    msg["Subject"] = f'{cfg["subject_prefix"]}{subject}' if cfg["subject_prefix"] else subject
-    msg["From"]    = cfg["from"]
-    msg["To"]      = ", ".join(recipients)
-    msg.add_alternative(body, subtype="html")
+    prefix = cfg.get("subject_prefix", "")
+    full_subject = f"{prefix}{subject}" if prefix else subject
 
-    if cfg["use_ssl"]:
-        with smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=ssl.create_default_context()) as srv:
-            srv.login(cfg["username"], cfg["password"])
-            srv.send_message(msg)
-    else:
-        with smtplib.SMTP(cfg["host"], cfg["port"]) as srv:
-            srv.ehlo()
-            srv.starttls(context=ssl.create_default_context())
-            srv.login(cfg["username"], cfg["password"])
-            srv.send_message(msg)
+    resp = requests.post(
+        "https://api.resend.com/emails",
+        headers={"Authorization": f"Bearer {cfg['api_key']}", "Content-Type": "application/json"},
+        json={"from": cfg["from"], "to": recipients, "subject": full_subject, "html": body},
+        timeout=15,
+    )
+    if not resp.ok:
+        raise RuntimeError(f"Resend API error {resp.status_code}: {resp.text}")
 
 # ---------------- Core data loaders ----------------
 @st.cache_data
@@ -270,7 +259,7 @@ logs      = read_log()
 
 # ---------------- Page header ----------------
 st.title("📦 Supply Ordering & Inventory Tracker")
-email_ready = "✅" if smtp_ok() else "❌"
+email_ready = "✅" if email_ok() else "❌"
 st.caption(f"Loaded {len(catalog)} catalog rows • {len(logs)} log rows • Email configured: {email_ready}")
 
 # ---------------- Running order preview ----------------
@@ -397,7 +386,7 @@ with tabs[0]:
                 when_str      = append_log(full_order_df, orderer)
                 st.success(f"Order logged at {when_str}.")
 
-                if smtp_ok():
+                if email_ok():
                     recipients = all_recipients(emails_df)
                     if recipients:
                         body = build_email_body(st.session_state["qty_map"], catalog, orderer, when_str)
