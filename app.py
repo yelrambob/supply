@@ -5,7 +5,8 @@ import zoneinfo
 from datetime import datetime
 from pathlib import Path
 import re
-import requests
+import smtplib, ssl
+from email.message import EmailMessage
 from supabase import create_client
 
 st.set_page_config(page_title="Supply Ordering", page_icon="📦", layout="wide")
@@ -44,7 +45,7 @@ def safe_read_csv(path: Path, **kwargs) -> pd.DataFrame:
         st.warning(f"Couldn't read {path.name}: {e}")
         return pd.DataFrame()
 
-# ---------------- Email (Resend) ----------------
+# ---------------- Email (Gmail SMTP) ----------------
 def _split_emails(txt: str) -> list[str]:
     if not txt:
         return []
@@ -52,11 +53,13 @@ def _split_emails(txt: str) -> list[str]:
 
 def get_email_config() -> dict:
     try:
-        s = st.secrets["brevo"]
+        s = st.secrets["smtp"]
         return {
-            "api_key":        s.get("api_key", ""),
-            "from_email":     s.get("from_email", ""),
-            "from_name":      s.get("from_name", "Supply Orders"),
+            "host":           s.get("host", "smtp.gmail.com"),
+            "port":           int(s.get("port", 587)),
+            "username":       s.get("user", ""),
+            "password":       s.get("password", "").replace(" ", ""),
+            "from":           s.get("from", ""),
             "subject_prefix": s.get("subject_prefix", ""),
             "default_to":     _split_emails(s.get("to", "")) if s.get("to") else [],
         }
@@ -65,7 +68,7 @@ def get_email_config() -> dict:
 
 def email_ok() -> bool:
     cfg = get_email_config()
-    return bool(cfg.get("api_key") and cfg.get("from_email"))
+    return all(cfg.get(k) for k in ["host", "username", "password", "from"])
 
 def send_email(subject: str, body: str, to_emails: list[str] | None):
     cfg = get_email_config()
@@ -79,19 +82,17 @@ def send_email(subject: str, body: str, to_emails: list[str] | None):
     prefix = cfg.get("subject_prefix", "")
     full_subject = f"{prefix}{subject}" if prefix else subject
 
-    resp = requests.post(
-        "https://api.brevo.com/v3/smtp/email",
-        headers={"api-key": cfg["api_key"], "Content-Type": "application/json"},
-        json={
-            "sender":      {"name": cfg["from_name"], "email": cfg["from_email"]},
-            "to":          [{"email": e} for e in recipients],
-            "subject":     full_subject,
-            "htmlContent": body,
-        },
-        timeout=15,
-    )
-    if not resp.ok:
-        raise RuntimeError(f"Brevo API error {resp.status_code}: {resp.text}")
+    msg = EmailMessage()
+    msg["Subject"] = full_subject
+    msg["From"]    = cfg["from"]
+    msg["To"]      = ", ".join(recipients)
+    msg.add_alternative(body, subtype="html")
+
+    with smtplib.SMTP(cfg["host"], cfg["port"]) as srv:
+        srv.ehlo()
+        srv.starttls(context=ssl.create_default_context())
+        srv.login(cfg["username"], cfg["password"])
+        srv.send_message(msg)
 
 # ---------------- Core data loaders ----------------
 @st.cache_data
@@ -265,7 +266,8 @@ logs      = read_log()
 
 # ---------------- Page header ----------------
 st.title("📦 Supply Ordering & Inventory Tracker")
-email_ready = "✅" if email_ok() else "❌"
+cfg = get_email_config()
+email_ready = "✅" if email_ok() else f"❌ (keys found: {list(k for k,v in cfg.items() if v)})"
 st.caption(f"Loaded {len(catalog)} catalog rows • {len(logs)} log rows • Email configured: {email_ready}")
 
 # ---------------- Running order preview ----------------
