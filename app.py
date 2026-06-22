@@ -266,7 +266,8 @@ logs      = read_log()
 
 # ---------------- Page header ----------------
 st.title("📦 Supply Ordering & Inventory Tracker")
-email_ready = "✅" if email_ok() else "❌"
+cfg = get_email_config()
+email_ready = "✅" if email_ok() else f"❌ (keys found: {list(k for k,v in cfg.items() if v)})"
 st.caption(f"Loaded {len(catalog)} catalog rows • {len(logs)} log rows • Email configured: {email_ready}")
 
 # ---------------- Running order preview ----------------
