@@ -289,9 +289,34 @@ if selected_items:
     sel_df = pd.DataFrame(selected_items)
     st.dataframe(sel_df, hide_index=True, use_container_width=True)
     st.markdown(f"**Product Numbers:** {', '.join(str(i['product_number']) for i in selected_items)}")
-    if st.button("🧹 Clear Current Order"):
-        st.session_state["qty_map"] = {}
-        st.rerun()
+    if st.button("🧾 Generate & Log Order", key="gen_log_top"):
+        _top_orderer = st.session_state.get("orderer") or (people[0] if people else "Unknown")
+        full_order = [
+            {
+                "item":           catalog.loc[catalog["product_number"].astype(str) == str(pid)].iloc[0]["item"],
+                "product_number": pid,
+                "qty":            qty,
+            }
+            for pid, qty in st.session_state["qty_map"].items()
+            if qty > 0 and not catalog.loc[catalog["product_number"].astype(str) == str(pid)].empty
+        ]
+        if not full_order:
+            st.warning("No items selected.")
+        else:
+            full_order_df = pd.DataFrame(full_order)
+            when_str      = append_log(full_order_df, _top_orderer)
+            st.success(f"Order logged at {when_str}.")
+            if smtp_ok():
+                recipients = all_recipients(emails_df)
+                if recipients:
+                    body = build_email_body(st.session_state["qty_map"], catalog, _top_orderer, when_str)
+                    try:
+                        send_email("Supply Order Logged", body, recipients)
+                        st.success(f"Email sent to {len(recipients)} recipient(s).")
+                    except Exception as e:
+                        st.error(f"Email failed: {e}")
+            st.session_state["qty_map"] = {}
+            st.rerun()
 else:
     st.caption("🛒 No items currently selected.")
 
@@ -409,6 +434,10 @@ with tabs[0]:
 
                 st.session_state["qty_map"] = {}
                 st.rerun()
+
+        if st.button("🧹 Clear Current Order"):
+            st.session_state["qty_map"] = {}
+            st.rerun()
 
 # ----------------------------------------------------------------
 # Tab 1 — Adjust Inventory
