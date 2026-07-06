@@ -303,7 +303,7 @@ if selected_items:
             full_order_df = pd.DataFrame(full_order)
             when_str      = append_log(full_order_df, _top_orderer)
             st.success(f"Order logged at {when_str}.")
-            if smtp_ok():
+            if email_ok():
                 recipients = all_recipients(emails_df)
                 if recipients:
                     body = build_email_body(st.session_state["qty_map"], catalog, _top_orderer, when_str)
