@@ -1,4 +1,4 @@
-Item,Product_number,Multiplier_per_box,Recommended_qty_per_order,price,category
+Item,Product_number,Multiplier_per_box,Recommended_qty_per_order,price
 Xtra Small Nitrile Gloves,179887,1,10,78
 Small Nitrile Gloves,48730,10,1,8
 Medium Nitrile Gloves,48731,10,1,8
@@ -66,6 +66,7 @@ Shoe Covers ,90,1,1,11.5
 Hand Sanitizer Dispenser,230391,1,1,52
 Purple Wipes ,154245,1,1,5.5
 Bleach Wipes ,159378,1,1,5
+Screen Wipes, 197207,1,1,4
 Paper Towels ,121,1,1,23
 Sit Sling ,98617,1,1,38
 White Disposable Chair Slip M/L,98616,1,1,41
