@@ -1,0 +1,23 @@
+name: Wake Streamlit app every morning
+
+on:
+  schedule:
+    # 12:00 UTC = 8:00 AM ET (7:00 AM during EST); wakes the app before the day starts.
+    - cron: "0 12 * * *"
+  workflow_dispatch:
+
+jobs:
+  wake:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install Playwright
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+      - name: Wake app
+        run: python .github/scripts/wake_streamlit.py
