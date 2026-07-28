@@ -170,6 +170,7 @@ def read_catalog() -> pd.DataFrame:
                 "current_qty",
                 "sort_order",
                 "price",
+                "category",
             ]
         )
 
@@ -190,6 +191,7 @@ def read_catalog() -> pd.DataFrame:
         "sort_order": "sort_order",
         "price": "price",
         "item": "item",
+        "category": "category",
     }
 
     df = df.rename(columns=column_aliases)
@@ -202,6 +204,7 @@ def read_catalog() -> pd.DataFrame:
         "current_qty",
         "sort_order",
         "price",
+        "category",
     ]
 
     for column in required_columns:
@@ -266,6 +269,11 @@ def read_catalog() -> pd.DataFrame:
         .fillna(filler)
         .astype(int)
     )
+
+    df["category"] = pd.to_numeric(
+        df["category"],
+        errors="coerce",
+    ).astype("Int64")
 
     return df.reset_index(drop=True)
 
@@ -493,6 +501,10 @@ def build_email_body(
             )
             or 0
         )
+        category = matching_rows.iloc[0].get(
+            "category",
+            pd.NA,
+        )
 
         items.append(
             (
@@ -500,15 +512,28 @@ def build_email_body(
                 qty,
                 item_name,
                 qty * price,
+                category,
             )
         )
+
+    # Group by category first (uncategorized items sort last),
+    # keeping the existing relative order within each category —
+    # sorted() is stable, so ties fall back to the order items
+    # were added to the order list.
+    items.sort(
+        key=lambda item: (
+            float("inf")
+            if pd.isna(item[4])
+            else float(item[4])
+        )
+    )
 
     # First-fit bin packing.
     bins: list[list[tuple]] = []
     bin_totals: list[float] = []
 
     for item in items:
-        _, _, _, total = item
+        _, _, _, total, _ = item
         placed = False
 
         for index, bin_total in enumerate(
@@ -536,6 +561,7 @@ def build_email_body(
             product_number,
             qty,
             item_name,
+            _,
             _,
         ) in group
     ]
@@ -1054,7 +1080,7 @@ with tabs[1]:
     else:
         st.write(
             "Adjust `current_qty`, `sort_order`, "
-            "or `price`, then save."
+            "`price`, or `category`, then save."
         )
 
         edited_inventory = st.data_editor(
@@ -1096,6 +1122,11 @@ with tabs[1]:
                     "Price ($)",
                     min_value=0.0,
                     step=0.01,
+                ),
+                "category": st.column_config.NumberColumn(
+                    "Category",
+                    min_value=0,
+                    step=1,
                 ),
             },
             key="inventory_editor",
