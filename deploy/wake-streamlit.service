@@ -1,0 +1,10 @@
+[Unit]
+Description=Wake the Streamlit Community Cloud app
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/supply
+ExecStart=/opt/supply/venv/bin/python /opt/supply/.github/scripts/wake_streamlit.py
+User=www-data
