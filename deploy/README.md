@@ -62,9 +62,14 @@ Visit `http://<server-public-ip>/` to confirm it's serving.
 
 A plain `curl` does **not** wake a sleeping Streamlit Community Cloud app —
 the "Yes, get this app back up!" button has to actually be clicked in a real
-browser. `.github/scripts/wake_streamlit.py` already does this with
-Playwright (added for the GitHub Actions workflow); the systemd units below
-reuse that same script on your server instead of relying on GitHub Actions.
+browser. `.github/scripts/wake_streamlit.py` does this with Playwright; the
+systemd units below reuse that same script on your server instead of relying
+on GitHub Actions.
+
+(This repo used to also have a `keep-alive.yml` workflow that just curled the
+app every 6 hours — it was removed because it never actually worked, curl
+can't click a JS button. The remaining `wake-app.yml` workflow uses the same
+Playwright script as below and now runs every 6 hours too.)
 
 ```bash
 sudo cp /opt/supply/deploy/wake-streamlit.service /etc/systemd/system/
