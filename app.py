@@ -493,6 +493,7 @@ def build_email_body(
             )
             or 0
         )
+        category = matching_rows.iloc[0].get("category", "")
 
         items.append(
             (
@@ -500,6 +501,7 @@ def build_email_body(
                 qty,
                 item_name,
                 qty * price,
+                category,
             )
         )
 
@@ -508,7 +510,7 @@ def build_email_body(
     bin_totals: list[float] = []
 
     for item in items:
-        _, _, _, total = item
+        _, _, _, total, _ = item
         placed = False
 
         for index, bin_total in enumerate(
@@ -524,6 +526,17 @@ def build_email_body(
             bins.append([item])
             bin_totals.append(total)
 
+    def _category_sort_key(category):
+        try:
+            return (0, float(category))
+        except (TypeError, ValueError):
+            return (1, str(category))
+
+    details_items = sorted(
+        items,
+        key=lambda item: _category_sort_key(item[4]),
+    )
+
     details_lines = [
         (
             "<label>"
@@ -531,13 +544,13 @@ def build_email_body(
             f"{item_name} (#{product_number}): {qty}"
             "</label>"
         )
-        for group in bins
         for (
             product_number,
             qty,
             item_name,
             _,
-        ) in group
+            _,
+        ) in details_items
     ]
 
     group_lines = [
