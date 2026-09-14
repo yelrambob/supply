@@ -273,6 +273,32 @@ def _seed_catalog_from_csv_if_empty():
         return
 
     df = _normalize_catalog(df)
+
+    duplicated = df["product_number"].duplicated(
+        keep=False
+    )
+
+    if duplicated.any():
+        conflicts = df.loc[
+            duplicated, ["item", "product_number"]
+        ]
+        conflict_lines = "\n".join(
+            f"- {row.item} (#{row.product_number})"
+            for row in conflicts.itertuples()
+        )
+        st.warning(
+            "Some catalog items share the same product "
+            "number. Only the first item per product "
+            "number was kept during the initial import "
+            "-- the others were skipped. Give these a "
+            "unique product number and re-add them via "
+            "\"Add new catalog item\":\n\n"
+            f"{conflict_lines}"
+        )
+        df = df.drop_duplicates(
+            subset="product_number", keep="first"
+        )
+
     rows = df[CATALOG_COLUMNS].to_dict("records")
 
     if rows:
