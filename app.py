@@ -700,6 +700,14 @@ def create_order_dataframe(
     return pd.DataFrame(full_order)
 
 
+def flash(kind: str, message: str):
+    """Queue a status message to survive the st.rerun() that
+    follows a successful order submission."""
+    st.session_state.setdefault("flash", []).append(
+        (kind, message)
+    )
+
+
 def log_and_email_order(
     orderer: str,
     qty_map: dict,
@@ -721,7 +729,7 @@ def log_and_email_order(
         orderer,
     )
 
-    st.success(f"Order logged at {when_str}.")
+    flash("success", f"Order logged at {when_str}.")
 
     if email_ok():
         recipients, special_only = recipients_for_orderer(
@@ -749,35 +757,40 @@ def log_and_email_order(
                 )
 
                 if special_only:
-                    st.success(
+                    flash(
+                        "success",
                         "Greg's order email was sent only "
                         f"to the emails2.csv recipient list "
-                        f"({len(recipients)} recipient(s))."
+                        f"({len(recipients)} recipient(s)).",
                     )
                 else:
-                    st.success(
+                    flash(
+                        "success",
                         "Email sent to "
-                        f"{len(recipients)} recipient(s)."
+                        f"{len(recipients)} recipient(s).",
                     )
 
             except Exception as e:
-                st.error(f"Email failed: {e}")
+                flash("error", f"Email failed: {e}")
         else:
             if special_only:
-                st.error(
+                flash(
+                    "error",
                     "Greg was selected, but no valid "
                     "email address was found in "
-                    "data/emails2.csv."
+                    "data/emails2.csv.",
                 )
             else:
-                st.error(
-                    "No valid email recipients were found."
+                flash(
+                    "error",
+                    "No valid email recipients were found.",
                 )
     else:
-        st.error(
+        flash(
+            "error",
             "Order was logged, but no email was sent: "
             "SMTP is not configured (missing host/user/"
-            "password/from in st.secrets['smtp'])."
+            "password/from in st.secrets['smtp']).",
         )
 
     return True
@@ -789,6 +802,9 @@ if "orderer" not in st.session_state:
 
 if "qty_map" not in st.session_state:
     st.session_state["qty_map"] = {}
+
+for _flash_kind, _flash_message in st.session_state.pop("flash", []):
+    getattr(st, _flash_kind)(_flash_message)
 
 
 # ---------------- Load data ----------------
