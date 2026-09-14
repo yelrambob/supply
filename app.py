@@ -156,61 +156,45 @@ def read_people() -> list[str]:
         return []
 
 
-@st.cache_data
-def read_catalog() -> pd.DataFrame:
-    df = safe_read_csv(CATALOG_PATH)
+CATALOG_COLUMNS = [
+    "item",
+    "product_number",
+    "multiplier",
+    "items_per_order",
+    "current_qty",
+    "sort_order",
+    "price",
+    "category",
+]
 
-    if df.empty:
-        return pd.DataFrame(
-            columns=[
-                "item",
-                "product_number",
-                "multiplier",
-                "items_per_order",
-                "current_qty",
-                "sort_order",
-                "price",
-            ]
-        )
 
-    # Normalize column names.
+def _normalize_catalog(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
     df.columns = [
         str(column).strip().lower()
         for column in df.columns
     ]
 
-    column_aliases = {
-        "product_number": "product_number",
+    df = df.rename(columns={
         "product number": "product_number",
         "multiplier_per_box": "multiplier",
-        "multiplier": "multiplier",
         "recommended_qty_per_order": "items_per_order",
-        "items_per_order": "items_per_order",
-        "current_qty": "current_qty",
-        "sort_order": "sort_order",
-        "price": "price",
-        "item": "item",
-    }
+    })
 
-    df = df.rename(columns=column_aliases)
-
-    required_columns = [
-        "item",
-        "product_number",
-        "multiplier",
-        "items_per_order",
-        "current_qty",
-        "sort_order",
-        "price",
-    ]
-
-    for column in required_columns:
+    for column in CATALOG_COLUMNS:
         if column not in df.columns:
             df[column] = pd.NA
 
     df["item"] = df["item"].astype(str).str.strip()
     df["product_number"] = (
         df["product_number"]
+        .astype(str)
+        .str.strip()
+    )
+    df["category"] = (
+        df["category"]
+        .fillna("")
         .astype(str)
         .str.strip()
     )
@@ -270,8 +254,80 @@ def read_catalog() -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
+def _seed_catalog_from_csv_if_empty():
+    """One-time migration: populate the Supabase catalog table
+    from data/catalog.csv the first time it's found empty."""
+    existing = (
+        supabase.table("catalog")
+        .select("product_number")
+        .limit(1)
+        .execute()
+    )
+
+    if getattr(existing, "data", None):
+        return
+
+    df = safe_read_csv(CATALOG_PATH)
+
+    if df.empty:
+        return
+
+    df = _normalize_catalog(df)
+    rows = df[CATALOG_COLUMNS].to_dict("records")
+
+    if rows:
+        supabase.table("catalog").upsert(
+            rows, on_conflict="product_number"
+        ).execute()
+
+
+@st.cache_data
+def read_catalog() -> pd.DataFrame:
+    _seed_catalog_from_csv_if_empty()
+
+    response = supabase.table("catalog").select("*").execute()
+
+    if not getattr(response, "data", None):
+        return pd.DataFrame(columns=CATALOG_COLUMNS)
+
+    df = _normalize_catalog(pd.DataFrame(response.data))
+
+    return df.sort_values("sort_order").reset_index(drop=True)
+
+
 def write_catalog(df: pd.DataFrame):
-    df.to_csv(CATALOG_PATH, index=False)
+    df = _normalize_catalog(df)
+    rows = df[CATALOG_COLUMNS].to_dict("records")
+
+    if rows:
+        supabase.table("catalog").upsert(
+            rows, on_conflict="product_number"
+        ).execute()
+
+    read_catalog.clear()
+
+
+def add_catalog_item(
+    item: str,
+    product_number: str,
+    multiplier: int,
+    items_per_order: int,
+    current_qty: int,
+    sort_order: int,
+    price: float,
+    category: str,
+):
+    supabase.table("catalog").insert({
+        "item": item.strip(),
+        "product_number": str(product_number).strip(),
+        "multiplier": int(multiplier),
+        "items_per_order": int(items_per_order),
+        "current_qty": int(current_qty),
+        "sort_order": int(sort_order),
+        "price": float(price),
+        "category": category.strip(),
+    }).execute()
+
     read_catalog.clear()
 
 
@@ -835,8 +891,8 @@ tabs = st.tabs(
 with tabs[0]:
     if catalog.empty:
         st.info(
-            "No catalog found. "
-            "Add items to data/catalog.csv."
+            "No catalog found. Add items on the "
+            "\"Adjust Inventory\" tab."
         )
     else:
         column_1, column_2 = st.columns(
@@ -1068,6 +1124,114 @@ with tabs[0]:
 # Tab 1 — Adjust Inventory
 # ----------------------------------------------------------------
 with tabs[1]:
+    with st.expander("➕ Add new catalog item"):
+        with st.form(
+            "add_catalog_item_form",
+            clear_on_submit=True,
+        ):
+            new_item = st.text_input("Item name")
+            new_product_number = st.text_input(
+                "Product number"
+            )
+            new_category = st.text_input(
+                "Category", value=""
+            )
+
+            col_a, col_b, col_c = st.columns(3)
+
+            with col_a:
+                new_multiplier = st.number_input(
+                    "Multiplier",
+                    min_value=1,
+                    step=1,
+                    value=1,
+                )
+
+            with col_b:
+                new_items_per_order = st.number_input(
+                    "Items/Order",
+                    min_value=1,
+                    step=1,
+                    value=1,
+                )
+
+            with col_c:
+                new_current_qty = st.number_input(
+                    "Current Qty",
+                    min_value=0,
+                    step=1,
+                    value=0,
+                )
+
+            col_d, col_e = st.columns(2)
+
+            with col_d:
+                new_price = st.number_input(
+                    "Price ($)",
+                    min_value=0.0,
+                    step=0.01,
+                    value=0.0,
+                )
+
+            with col_e:
+                default_sort_order = (
+                    int(catalog["sort_order"].max()) + 1
+                    if not catalog.empty
+                    else 0
+                )
+                new_sort_order = st.number_input(
+                    "Sort order",
+                    min_value=0,
+                    step=1,
+                    value=default_sort_order,
+                )
+
+            submitted = st.form_submit_button(
+                "Add item"
+            )
+
+            if submitted:
+                existing_numbers = (
+                    catalog["product_number"]
+                    .astype(str)
+                    .values
+                )
+
+                if (
+                    not new_item.strip()
+                    or not new_product_number.strip()
+                ):
+                    st.error(
+                        "Item name and product number "
+                        "are required."
+                    )
+                elif (
+                    new_product_number.strip()
+                    in existing_numbers
+                ):
+                    st.error(
+                        "Product number "
+                        f"{new_product_number.strip()} "
+                        "already exists in the catalog."
+                    )
+                else:
+                    add_catalog_item(
+                        new_item,
+                        new_product_number,
+                        new_multiplier,
+                        new_items_per_order,
+                        new_current_qty,
+                        new_sort_order,
+                        new_price,
+                        new_category,
+                    )
+                    st.success(
+                        f"Added {new_item} "
+                        f"(#{new_product_number}) "
+                        "to the catalog."
+                    )
+                    st.rerun()
+
     if catalog.empty:
         st.info("No catalog found.")
     else:
@@ -1132,7 +1296,7 @@ with tabs[1]:
 # ----------------------------------------------------------------
 with tabs[2]:
     st.caption(
-        "Catalog source: data/catalog.csv"
+        "Catalog source: Supabase (\"catalog\" table)"
     )
 
     if catalog.empty:
