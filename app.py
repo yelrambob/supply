@@ -691,6 +691,12 @@ def log_and_email_order(
                 st.error(
                     "No valid email recipients were found."
                 )
+    else:
+        st.error(
+            "Order was logged, but no email was sent: "
+            "SMTP is not configured (missing host/user/"
+            "password/from in st.secrets['smtp'])."
+        )
 
     return True
 
