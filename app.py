@@ -457,8 +457,15 @@ def last_info_map() -> pd.DataFrame:
 
 
 # ---------------- Email recipient files ----------------
-@st.cache_data
 def read_email_file(path: Path) -> pd.DataFrame:
+    # Key the cache on the file's mtime so edits to the CSV are picked
+    # up immediately instead of serving a stale (possibly empty) list.
+    mtime = path.stat().st_mtime if path.exists() else None
+    return _read_email_file_cached(path, mtime)
+
+
+@st.cache_data
+def _read_email_file_cached(path: Path, mtime: float | None) -> pd.DataFrame:
     df = safe_read_csv(path)
 
     if df.empty:
