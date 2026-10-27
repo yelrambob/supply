@@ -156,64 +156,45 @@ def read_people() -> list[str]:
         return []
 
 
-@st.cache_data
-def read_catalog() -> pd.DataFrame:
-    df = safe_read_csv(CATALOG_PATH)
+CATALOG_COLUMNS = [
+    "item",
+    "product_number",
+    "multiplier",
+    "items_per_order",
+    "current_qty",
+    "sort_order",
+    "price",
+    "category",
+]
 
-    if df.empty:
-        return pd.DataFrame(
-            columns=[
-                "item",
-                "product_number",
-                "multiplier",
-                "items_per_order",
-                "current_qty",
-                "sort_order",
-                "price",
-                "category",
-            ]
-        )
 
-    # Normalize column names.
+def _normalize_catalog(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+
     df.columns = [
         str(column).strip().lower()
         for column in df.columns
     ]
 
-    column_aliases = {
-        "product_number": "product_number",
+    df = df.rename(columns={
         "product number": "product_number",
         "multiplier_per_box": "multiplier",
-        "multiplier": "multiplier",
         "recommended_qty_per_order": "items_per_order",
-        "items_per_order": "items_per_order",
-        "current_qty": "current_qty",
-        "sort_order": "sort_order",
-        "price": "price",
-        "item": "item",
-        "category": "category",
-    }
+    })
 
-    df = df.rename(columns=column_aliases)
-
-    required_columns = [
-        "item",
-        "product_number",
-        "multiplier",
-        "items_per_order",
-        "current_qty",
-        "sort_order",
-        "price",
-        "category",
-    ]
-
-    for column in required_columns:
+    for column in CATALOG_COLUMNS:
         if column not in df.columns:
             df[column] = pd.NA
 
     df["item"] = df["item"].astype(str).str.strip()
     df["product_number"] = (
         df["product_number"]
+        .astype(str)
+        .str.strip()
+    )
+    df["category"] = (
+        df["category"]
+        .fillna("")
         .astype(str)
         .str.strip()
     )
@@ -270,16 +251,109 @@ def read_catalog() -> pd.DataFrame:
         .astype(int)
     )
 
-    df["category"] = pd.to_numeric(
-        df["category"],
-        errors="coerce",
-    ).astype("Int64")
-
     return df.reset_index(drop=True)
 
 
+def _seed_catalog_from_csv_if_empty():
+    """One-time migration: populate the Supabase catalog table
+    from data/catalog.csv the first time it's found empty."""
+    existing = (
+        supabase.table("catalog")
+        .select("product_number")
+        .limit(1)
+        .execute()
+    )
+
+    if getattr(existing, "data", None):
+        return
+
+    df = safe_read_csv(CATALOG_PATH)
+
+    if df.empty:
+        return
+
+    df = _normalize_catalog(df)
+
+    duplicated = df["product_number"].duplicated(
+        keep=False
+    )
+
+    if duplicated.any():
+        conflicts = df.loc[
+            duplicated, ["item", "product_number"]
+        ]
+        conflict_lines = "\n".join(
+            f"- {row.item} (#{row.product_number})"
+            for row in conflicts.itertuples()
+        )
+        st.warning(
+            "Some catalog items share the same product "
+            "number. Only the first item per product "
+            "number was kept during the initial import "
+            "-- the others were skipped. Give these a "
+            "unique product number and re-add them via "
+            "\"Add new catalog item\":\n\n"
+            f"{conflict_lines}"
+        )
+        df = df.drop_duplicates(
+            subset="product_number", keep="first"
+        )
+
+    rows = df[CATALOG_COLUMNS].to_dict("records")
+
+    if rows:
+        supabase.table("catalog").upsert(
+            rows, on_conflict="product_number"
+        ).execute()
+
+
+@st.cache_data
+def read_catalog() -> pd.DataFrame:
+    _seed_catalog_from_csv_if_empty()
+
+    response = supabase.table("catalog").select("*").execute()
+
+    if not getattr(response, "data", None):
+        return pd.DataFrame(columns=CATALOG_COLUMNS)
+
+    df = _normalize_catalog(pd.DataFrame(response.data))
+
+    return df.sort_values("sort_order").reset_index(drop=True)
+
+
 def write_catalog(df: pd.DataFrame):
-    df.to_csv(CATALOG_PATH, index=False)
+    df = _normalize_catalog(df)
+    rows = df[CATALOG_COLUMNS].to_dict("records")
+
+    if rows:
+        supabase.table("catalog").upsert(
+            rows, on_conflict="product_number"
+        ).execute()
+
+    read_catalog.clear()
+
+
+def add_catalog_item(
+    item: str,
+    product_number: str,
+    multiplier: int,
+    items_per_order: int,
+    current_qty: int,
+    sort_order: int,
+    price: float,
+    category: str,
+):
+    supabase.table("catalog").insert({
+        "item": item.strip(),
+        "product_number": str(product_number).strip(),
+        "multiplier": int(multiplier),
+        "items_per_order": int(items_per_order),
+        "current_qty": int(current_qty),
+        "sort_order": int(sort_order),
+        "price": float(price),
+        "category": category.strip(),
+    }).execute()
+
     read_catalog.clear()
 
 
@@ -383,8 +457,15 @@ def last_info_map() -> pd.DataFrame:
 
 
 # ---------------- Email recipient files ----------------
-@st.cache_data
 def read_email_file(path: Path) -> pd.DataFrame:
+    # Key the cache on the file's mtime so edits to the CSV are picked
+    # up immediately instead of serving a stale (possibly empty) list.
+    mtime = path.stat().st_mtime if path.exists() else None
+    return _read_email_file_cached(path, mtime)
+
+
+@st.cache_data
+def _read_email_file_cached(path: Path, mtime: float | None) -> pd.DataFrame:
     df = safe_read_csv(path)
 
     if df.empty:
@@ -473,6 +554,18 @@ def recipients_for_orderer(
 
 
 # ---------------- Email body builder ----------------
+GROUP_MAX_TOTAL = 4999
+# Max characters the order system accepts for a pasted group, e.g.
+# "20545", "117993", "246132", "100538", "21296", "23075", "23081", "252321", "70028", "100868"
+GROUP_MAX_CHARS = 93
+
+
+def _group_text_length(group: list[tuple]) -> int:
+    return len(
+        ", ".join(f'"{product_number}"' for product_number, *_ in group)
+    )
+
+
 def build_email_body(
     qty_map: dict,
     catalog: pd.DataFrame,
@@ -501,10 +594,7 @@ def build_email_body(
             )
             or 0
         )
-        category = matching_rows.iloc[0].get(
-            "category",
-            pd.NA,
-        )
+        category = matching_rows.iloc[0].get("category", "")
 
         items.append(
             (
@@ -516,19 +606,19 @@ def build_email_body(
             )
         )
 
-    # Group by category first (uncategorized items sort last),
-    # keeping the existing relative order within each category —
-    # sorted() is stable, so ties fall back to the order items
-    # were added to the order list.
-    items.sort(
-        key=lambda item: (
-            float("inf")
-            if pd.isna(item[4])
-            else float(item[4])
-        )
-    )
+    def _category_sort_key(category):
+        try:
+            return (0, float(category))
+        except (TypeError, ValueError):
+            return (1, str(category))
 
-    # First-fit bin packing.
+    # Sort by category before bin packing so both the details list and
+    # the product groups follow category order. sorted() is stable, so
+    # ties keep the order items were added.
+    items.sort(key=lambda item: _category_sort_key(item[4]))
+
+    # First-fit bin packing, limited by both dollar total and the
+    # length of the quoted product-number list the order system accepts.
     bins: list[list[tuple]] = []
     bin_totals: list[float] = []
 
@@ -539,7 +629,11 @@ def build_email_body(
         for index, bin_total in enumerate(
             bin_totals
         ):
-            if bin_total + total <= 4999:
+            if (
+                bin_total + total <= GROUP_MAX_TOTAL
+                and _group_text_length(bins[index] + [item])
+                <= GROUP_MAX_CHARS
+            ):
                 bins[index].append(item)
                 bin_totals[index] += total
                 placed = True
@@ -556,14 +650,13 @@ def build_email_body(
             f"{item_name} (#{product_number}): {qty}"
             "</label>"
         )
-        for group in bins
         for (
             product_number,
             qty,
             item_name,
             _,
             _,
-        ) in group
+        ) in items
     ]
 
     group_lines = [
@@ -594,7 +687,7 @@ def build_email_body(
             </p>
 
             <p>
-                <strong>Product groups (≤$4,999 each):</strong><br>
+                <strong>Product groups (≤$4,999 and ≤{GROUP_MAX_CHARS} characters each):</strong><br>
                 {"<br>".join(group_lines)}
             </p>
         </body>
@@ -631,6 +724,14 @@ def create_order_dataframe(
     return pd.DataFrame(full_order)
 
 
+def flash(kind: str, message: str):
+    """Queue a status message to survive the st.rerun() that
+    follows a successful order submission."""
+    st.session_state.setdefault("flash", []).append(
+        (kind, message)
+    )
+
+
 def log_and_email_order(
     orderer: str,
     qty_map: dict,
@@ -652,7 +753,7 @@ def log_and_email_order(
         orderer,
     )
 
-    st.success(f"Order logged at {when_str}.")
+    flash("success", f"Order logged at {when_str}.")
 
     if email_ok():
         recipients, special_only = recipients_for_orderer(
@@ -680,30 +781,41 @@ def log_and_email_order(
                 )
 
                 if special_only:
-                    st.success(
+                    flash(
+                        "success",
                         "Greg's order email was sent only "
                         f"to the emails2.csv recipient list "
-                        f"({len(recipients)} recipient(s))."
+                        f"({len(recipients)} recipient(s)).",
                     )
                 else:
-                    st.success(
+                    flash(
+                        "success",
                         "Email sent to "
-                        f"{len(recipients)} recipient(s)."
+                        f"{len(recipients)} recipient(s).",
                     )
 
             except Exception as e:
-                st.error(f"Email failed: {e}")
+                flash("error", f"Email failed: {e}")
         else:
             if special_only:
-                st.error(
+                flash(
+                    "error",
                     "Greg was selected, but no valid "
                     "email address was found in "
-                    "data/emails2.csv."
+                    "data/emails2.csv.",
                 )
             else:
-                st.error(
-                    "No valid email recipients were found."
+                flash(
+                    "error",
+                    "No valid email recipients were found.",
                 )
+    else:
+        flash(
+            "error",
+            "Order was logged, but no email was sent: "
+            "SMTP is not configured (missing host/user/"
+            "password/from in st.secrets['smtp']).",
+        )
 
     return True
 
@@ -714,6 +826,9 @@ if "orderer" not in st.session_state:
 
 if "qty_map" not in st.session_state:
     st.session_state["qty_map"] = {}
+
+for _flash_kind, _flash_message in st.session_state.pop("flash", []):
+    getattr(st, _flash_kind)(_flash_message)
 
 
 # ---------------- Load data ----------------
@@ -842,8 +957,8 @@ tabs = st.tabs(
 with tabs[0]:
     if catalog.empty:
         st.info(
-            "No catalog found. "
-            "Add items to data/catalog.csv."
+            "No catalog found. Add items on the "
+            "\"Adjust Inventory\" tab."
         )
     else:
         column_1, column_2 = st.columns(
@@ -1075,6 +1190,114 @@ with tabs[0]:
 # Tab 1 — Adjust Inventory
 # ----------------------------------------------------------------
 with tabs[1]:
+    with st.expander("➕ Add new catalog item"):
+        with st.form(
+            "add_catalog_item_form",
+            clear_on_submit=True,
+        ):
+            new_item = st.text_input("Item name")
+            new_product_number = st.text_input(
+                "Product number"
+            )
+            new_category = st.text_input(
+                "Category", value=""
+            )
+
+            col_a, col_b, col_c = st.columns(3)
+
+            with col_a:
+                new_multiplier = st.number_input(
+                    "Multiplier",
+                    min_value=1,
+                    step=1,
+                    value=1,
+                )
+
+            with col_b:
+                new_items_per_order = st.number_input(
+                    "Items/Order",
+                    min_value=1,
+                    step=1,
+                    value=1,
+                )
+
+            with col_c:
+                new_current_qty = st.number_input(
+                    "Current Qty",
+                    min_value=0,
+                    step=1,
+                    value=0,
+                )
+
+            col_d, col_e = st.columns(2)
+
+            with col_d:
+                new_price = st.number_input(
+                    "Price ($)",
+                    min_value=0.0,
+                    step=0.01,
+                    value=0.0,
+                )
+
+            with col_e:
+                default_sort_order = (
+                    int(catalog["sort_order"].max()) + 1
+                    if not catalog.empty
+                    else 0
+                )
+                new_sort_order = st.number_input(
+                    "Sort order",
+                    min_value=0,
+                    step=1,
+                    value=default_sort_order,
+                )
+
+            submitted = st.form_submit_button(
+                "Add item"
+            )
+
+            if submitted:
+                existing_numbers = (
+                    catalog["product_number"]
+                    .astype(str)
+                    .values
+                )
+
+                if (
+                    not new_item.strip()
+                    or not new_product_number.strip()
+                ):
+                    st.error(
+                        "Item name and product number "
+                        "are required."
+                    )
+                elif (
+                    new_product_number.strip()
+                    in existing_numbers
+                ):
+                    st.error(
+                        "Product number "
+                        f"{new_product_number.strip()} "
+                        "already exists in the catalog."
+                    )
+                else:
+                    add_catalog_item(
+                        new_item,
+                        new_product_number,
+                        new_multiplier,
+                        new_items_per_order,
+                        new_current_qty,
+                        new_sort_order,
+                        new_price,
+                        new_category,
+                    )
+                    st.success(
+                        f"Added {new_item} "
+                        f"(#{new_product_number}) "
+                        "to the catalog."
+                    )
+                    st.rerun()
+
     if catalog.empty:
         st.info("No catalog found.")
     else:
@@ -1123,10 +1346,8 @@ with tabs[1]:
                     min_value=0.0,
                     step=0.01,
                 ),
-                "category": st.column_config.NumberColumn(
+                "category": st.column_config.TextColumn(
                     "Category",
-                    min_value=0,
-                    step=1,
                 ),
             },
             key="inventory_editor",
@@ -1144,7 +1365,7 @@ with tabs[1]:
 # ----------------------------------------------------------------
 with tabs[2]:
     st.caption(
-        "Catalog source: data/catalog.csv"
+        "Catalog source: Supabase (\"catalog\" table)"
     )
 
     if catalog.empty:
