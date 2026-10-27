@@ -554,6 +554,18 @@ def recipients_for_orderer(
 
 
 # ---------------- Email body builder ----------------
+GROUP_MAX_TOTAL = 4999
+# Max characters the order system accepts for a pasted group, e.g.
+# "20545", "117993", "246132", "100538", "21296", "23075", "23081", "252321", "70028", "100868"
+GROUP_MAX_CHARS = 93
+
+
+def _group_text_length(group: list[tuple]) -> int:
+    return len(
+        ", ".join(f'"{product_number}"' for product_number, *_ in group)
+    )
+
+
 def build_email_body(
     qty_map: dict,
     catalog: pd.DataFrame,
@@ -594,7 +606,8 @@ def build_email_body(
             )
         )
 
-    # First-fit bin packing.
+    # First-fit bin packing, limited by both dollar total and the
+    # length of the quoted product-number list the order system accepts.
     bins: list[list[tuple]] = []
     bin_totals: list[float] = []
 
@@ -605,7 +618,11 @@ def build_email_body(
         for index, bin_total in enumerate(
             bin_totals
         ):
-            if bin_total + total <= 4999:
+            if (
+                bin_total + total <= GROUP_MAX_TOTAL
+                and _group_text_length(bins[index] + [item])
+                <= GROUP_MAX_CHARS
+            ):
                 bins[index].append(item)
                 bin_totals[index] += total
                 placed = True
@@ -670,7 +687,7 @@ def build_email_body(
             </p>
 
             <p>
-                <strong>Product groups (≤$4,999 each):</strong><br>
+                <strong>Product groups (≤$4,999 and ≤{GROUP_MAX_CHARS} characters each):</strong><br>
                 {"<br>".join(group_lines)}
             </p>
         </body>
