@@ -4,6 +4,8 @@ from pandas.errors import EmptyDataError
 import zoneinfo
 from datetime import datetime
 from pathlib import Path
+import hmac
+import html
 import re
 import smtplib
 import ssl
@@ -17,6 +19,34 @@ st.set_page_config(
 )
 
 NYC = zoneinfo.ZoneInfo("America/New_York")
+
+
+# ---------------- Access password ----------------
+def require_password():
+    """If [app] password is set in secrets, require it before showing
+    anything. Without it, anyone with the link can edit the catalog
+    and send order emails."""
+    try:
+        expected = st.secrets["app"]["password"]
+    except Exception:
+        return
+
+    if not expected or st.session_state.get("authenticated"):
+        return
+
+    entered = st.text_input("Password", type="password")
+
+    if entered:
+        if hmac.compare_digest(entered, str(expected)):
+            st.session_state["authenticated"] = True
+            st.rerun()
+        else:
+            st.error("Incorrect password.")
+
+    st.stop()
+
+
+require_password()
 
 # ---------------- Paths ----------------
 APP_DIR = Path(__file__).resolve().parent
@@ -647,7 +677,8 @@ def build_email_body(
         (
             "<label>"
             "<input type='checkbox'/> "
-            f"{item_name} (#{product_number}): {qty}"
+            f"{html.escape(str(item_name))} "
+            f"(#{html.escape(str(product_number))}): {qty}"
             "</label>"
         )
         for (
@@ -663,7 +694,7 @@ def build_email_body(
         (
             "<label>"
             "<input type='checkbox'/> "
-            f"{', '.join(f'&quot;{product_number}&quot;' for product_number, *_ in group)}"
+            f"{', '.join(f'&quot;{html.escape(str(product_number))}&quot;' for product_number, *_ in group)}"
             f" = ${subtotal:,.0f}"
             "</label>"
         )
@@ -678,7 +709,7 @@ def build_email_body(
         <body>
             <p>
                 <strong>New supply order at {when_str}</strong><br>
-                Ordered by: {orderer}
+                Ordered by: {html.escape(str(orderer))}
             </p>
 
             <p>
